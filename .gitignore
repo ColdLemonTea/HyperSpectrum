@@ -1,0 +1,27 @@
+.gradle/
+**/build/
+local.properties
+out/
+__pycache__/
+*.iml
+.idea/
+.DS_Store
+
+# Local research notes and agent instructions.
+AGENTS.md
+/docs/
+
+# Local signing keys and credentials.
+keystore.properties
+keystore/
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+.env
+.env.*
+
+# Distribution artifacts are published separately from source.
+*.apk
+*.aab
