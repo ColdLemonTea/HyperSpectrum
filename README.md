@@ -6,6 +6,11 @@ with six bars driven by the actual audio spectrum.
 The bars use artwork colors and settle smoothly when playback pauses. Casting
 and other island icons keep their stock appearance.
 
+The settings page shows module status, an audio spectrum switch, artwork color
+schemes, and app information. Original Lottie colors are the default, with
+optimized original and iOS-style colors also available. Turning the spectrum off
+restores the official Lottie animation.
+
 ## Compatibility
 
 | Platform | Required components | Status |
@@ -22,11 +27,19 @@ audio may also affect the spectrum.
 2. Enable **Miui Island Spectrum** in LSPosed and select only **SystemUI**
    (`com.android.systemui`).
 3. Restart the device for initial activation.
+4. Open **HyperSpectrum** from the module settings in LSPosed.
 
 ## Build
 
 Use a full Git checkout, Android SDK 37, and JDK 25 for the Gradle daemon.
 Set `ANDROID_HOME` or specify `sdk.dir` in a local, untracked `local.properties`.
+
+Place a local [miuix](https://github.com/compose-miuix-ui/miuix) checkout in
+`../miuix`, next to this project. The settings UI uses its Glass components
+(0.9.4 development sources) through a Gradle composite build. No published miuix
+artifacts are used. Both builds must use the same AGP version; this project
+currently matches the local checkout's AGP 9.3.2. The local miuix build also
+requires a JDK 21 toolchain, which Gradle can provision.
 
 For a signed APK, copy `keystore.properties.example` to `keystore.properties`
 and configure your own signing key locally. Keep signing keys and credentials

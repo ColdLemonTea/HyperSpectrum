@@ -13,7 +13,8 @@ final class VolumeCompensation {
     private double current = 1, target = 1;
     private long updated;
     private long settleUntil;
-    private boolean initialized;
+    private boolean initialized, muted;
+    private double envelopeRms = Double.NaN;
 
     static double gain(CaptureVolume mode, float volumeDb, float maximumDb) {
         // External volume is absent from the capture. Never add the headphone attenuation.
@@ -34,10 +35,18 @@ final class VolumeCompensation {
     }
 
     void target(double gain, long now, boolean reset) {
+        target(gain, now, reset, false);
+    }
+
+    void target(double gain, long now, boolean reset, boolean muted) {
+        // A silent measurement (or the first unmute buffer before the volume poll)
+        // is not a source envelope to preserve. Start unmute with the current curve.
+        reset |= initialized && this.muted && !muted;
+        this.muted = muted;
         gain = Double.isFinite(gain) ? Math.max(0, Math.min(MAX_GAIN, gain)) : DISPLAY_GAIN;
         // RMS averages old and new mixer buffers. Do not multiply that mixed window
         // by the new inverse volume: lowering the volume would create a false peak.
-        if (reset) settleUntil = 0;
+        if (reset) { settleUntil = 0; resetEnvelope(); }
         else if (initialized && gain != target) settleUntil = now + RMS_SETTLE_MS;
         value(now);
         target = gain;
@@ -46,6 +55,22 @@ final class VolumeCompensation {
     }
 
     boolean settling(long now) { return now < settleUntil; }
+
+    void resetEnvelope() { envelopeRms = Double.NaN; }
+
+    double captureGain(long now, boolean normalized, int rmsMb, double channelGain) {
+        double gain = value(now) * channelGain;
+        if (!normalized) { resetEnvelope(); return gain; }
+        double rms = rmsMb <= -9600 ? 0 : Math.pow(10, rmsMb / 2000.0);
+        if (!settling(now)) envelopeRms = rms * gain;
+        else if (rms > 0 && envelopeRms > 0) {
+            // Mixed old/new RMS cannot identify source loudness during a volume change.
+            // Hold only the last measured common envelope, never six frequency levels.
+            // The DSP still analyzes each fresh waveform; actual silence stays silent.
+            return envelopeRms / rms;
+        }
+        return gain;
+    }
 
     double value(long now) {
         if (!initialized) return current;

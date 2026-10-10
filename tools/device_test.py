@@ -124,6 +124,7 @@ def main() -> int:
                                ("reload", "Build/install update and require fresh hot reload with same PID/starttime")):
         build_command = sub.add_parser(command, help=help_text)
         build_command.add_argument("--diagnostic", action="store_true", help="Use the old bounded FFT probe instead of the live UI")
+        build_command.add_argument("--release", action="store_true", help="Build and install the signed, optimized Release APK")
     capture = sub.add_parser("capture", help="Capture fresh module logcat while user plays then pauses")
     capture.add_argument("--seconds", type=int, default=40)
     capture.add_argument("--output", type=Path, default=ROOT / "out" / "capture.log")
@@ -142,10 +143,14 @@ def main() -> int:
         if args.command == "reload":
             identity = device.identity()
             before = device.log_snapshot()
-        Device.run([str(ROOT / "gradlew"), ":app:assembleDebug", f"-PprobeBuild={build}",
+        variant = "release" if args.release else "debug"
+        task = ":app:assembleRelease" if args.release else ":app:assembleDebug"
+        Device.run([str(ROOT / "gradlew"), task, f"-PprobeBuild={build}",
                     "-PdiagnosticProbe=" + str(args.diagnostic).lower(),
                     "--console=plain"], cwd=ROOT, timeout=600)
-        apk = ROOT / "app/build/outputs/apk/debug/app-debug.apk"
+        apk = ROOT / f"app/build/outputs/apk/{variant}/app-{variant}.apk"
+        if not apk.is_file():
+            raise RuntimeError(f"Installable APK missing: {apk}. Release requires complete signing credentials.")
         print(device.adb_run("install", "-r", str(apk)), flush=True)
         output = ROOT / "out" / build
         output.mkdir(parents=True)

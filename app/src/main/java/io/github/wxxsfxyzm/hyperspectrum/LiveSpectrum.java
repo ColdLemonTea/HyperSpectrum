@@ -41,6 +41,7 @@ final class LiveSpectrum {
     private long lastVolume;
     private int volume, maxVolume;
     private boolean muted;
+    private boolean stopWhenMuted = SpectrumPreferences.DEFAULT_STOP_WHEN_MUTED;
     private long lastVolumeError, captureAfter, retryAfter;
     private final Visualizer.MeasurementPeakRms measurement = new Visualizer.MeasurementPeakRms();
     private boolean measurementReady;
@@ -50,7 +51,7 @@ final class LiveSpectrum {
     private final float[] minimum = new float[SpectrumDsp.BARS], maximum = new float[SpectrumDsp.BARS];
     private final double[] sum = new double[SpectrumDsp.BARS];
     private final int[] nearTop = new int[SpectrumDsp.BARS];
-    private int windowFrames;
+    private int windowFrames, volumeTransitionFrames;
     private int minimumRms, maximumRms;
     private long fftMaxUs;
     private final Runnable watchdog = this::watchdog;
@@ -87,6 +88,18 @@ final class LiveSpectrum {
         });
     }
 
+    void stopWhenMuted(boolean value) {
+        execute(() -> {
+            synchronized (this) {
+                stopWhenMuted = value;
+                if (value && muted) {
+                    latest = new float[SpectrumDsp.BARS];
+                    queueDelivery();
+                }
+            }
+        });
+    }
+
     private boolean source() {
         PlaybackSource.State next;
         Throwable error = null;
@@ -112,16 +125,17 @@ final class LiveSpectrum {
             OutputRoute.State next = outputRoute.read(source == null ? -1 : source.uid(),
                     visualizer == null ? -1 : captureSession, generation);
             boolean changed = output != null && (!output.key.equals(next.key) || output.mode != next.mode);
+            boolean silenceExit = output != null && output.muted && !next.muted;
             boolean log = output == null || changed || output.volume != next.volume
                     || output.muted != next.muted || !output.reason.equals(next.reason)
                     || Float.compare(output.appliedDb, next.appliedDb) != 0;
             output = next;
             volume = next.volume; maxVolume = next.maximum; muted = next.muted;
             double gain = BuildConfig.ROUTE_COMPENSATION ? next.gain() : 1;
-            compensation.target(gain, now, force || changed);
+            compensation.target(gain, now, force || changed, muted);
             if (log) reporter.report("spectrum_output type=" + next.type + " behavior=" + next.behavior
                     + " captureVolume=" + next.mode + " reason=" + next.reason
-                    + " volume=" + volume + "/" + maxVolume + " muted=" + muted
+                    + " volume=" + volume + "/" + maxVolume + " muted=" + muted + " silenceExit=" + silenceExit
                     + " volumeDb=" + next.volumeDb + " maximumDb=" + next.maximumDb
                     + " appliedDb=" + next.appliedDb + " policyOutput=" + next.policyOutput
                     + " desiredGain=" + next.gain() + " compensation=" + BuildConfig.ROUTE_COMPENSATION, null);
@@ -183,7 +197,8 @@ final class LiveSpectrum {
             measurementReady = visualizer.setMeasurementMode(Visualizer.MEASUREMENT_MODE_PEAK_RMS) == Visualizer.SUCCESS;
             normalized = measurementReady;
             check(visualizer.setScalingMode(normalized ? Visualizer.SCALING_MODE_NORMALIZED : Visualizer.SCALING_MODE_AS_PLAYED));
-            dsp = new SpectrumDsp(size); bass = new BassResponse(); resetRange();
+            dsp = new SpectrumDsp(size); bass = new BassResponse();
+            compensation.resetEnvelope(); resetRange();
             check(visualizer.setDataCaptureListener(new Visualizer.OnDataCaptureListener() {
                 @Override public void onWaveFormDataCapture(Visualizer v, byte[] bytes, int rate) {
                     synchronized (LiveSpectrum.this) {
@@ -198,19 +213,15 @@ final class LiveSpectrum {
                                 reporter.report("spectrum_measurement_unavailable fallback=as_played", null);
                                 return; // The current waveform still belongs to the previous scaling mode.
                             }
-                            if (normalized && compensation.settling(now)) {
-                                // Keep the last real frame through software-volume transitions.
-                                // Capture stays active so the old RMS buffers can expire. This is
-                                // healthy pending data, rather than a stock-animation fallback.
-                                lastFrame = now; queueDelivery(); return;
-                            }
                             long computeStart = SystemClock.elapsedRealtimeNanos();
                             channelGain = CaptureChannels.gain(sourceChannels, captureChannels, normalized);
-                            outputGain = compensation.value(now) * channelGain;
-                            // Stream mute is a playback setting. Render any real captured signal;
-                            // actual silent PCM and pause are handled by the DSP and view lifecycle.
+                            outputGain = compensation.captureGain(now, normalized, measurement.mRms, channelGain);
+                            if (normalized && compensation.settling(now)) volumeTransitionFrames++;
                             latest = dsp.levels(bytes, rate, normalized, measurement.mRms, false, outputGain);
                             latest[0] = bass.level(dsp.bandAmplitudes()[0], now);
+                            // Keep capturing real PCM so unmute can use the existing smooth onset.
+                            // Turning this option off never manufactures signal from silent PCM.
+                            if (stopWhenMuted && muted) Arrays.fill(latest, 0);
                             fftMaxUs = Math.max(fftMaxUs, (SystemClock.elapsedRealtimeNanos() - computeStart) / 1000);
                         }
                         catch (RuntimeException failure) {
@@ -251,6 +262,7 @@ final class LiveSpectrum {
                                     + " bassOnsets=" + bass.onsets() + " bassPeak=" + bass.peak()
                                     + " bassBase=" + SpectrumDsp.mapAmplitude(0, dsp.bandAmplitudes()[0])
                                     + " sampleRateHz=" + rate / 1000 + " windowFrames=" + windowFrames
+                                    + " volumeTransitionFrames=" + volumeTransitionFrames
                                     + " bands=" + Arrays.toString(dsp.bandAmplitudes())
                                     + " levels=" + Arrays.toString(latest)
                                     + " minimum=" + Arrays.toString(minimum) + " maximum=" + Arrays.toString(maximum)
@@ -286,7 +298,7 @@ final class LiveSpectrum {
 
     private void resetRange() {
         Arrays.fill(minimum, 1); Arrays.fill(maximum, 0);
-        Arrays.fill(sum, 0); Arrays.fill(nearTop, 0); windowFrames = 0;
+        Arrays.fill(sum, 0); Arrays.fill(nearTop, 0); windowFrames = volumeTransitionFrames = 0;
         minimumRms = Integer.MAX_VALUE; maximumRms = Integer.MIN_VALUE; fftMaxUs = 0;
     }
 

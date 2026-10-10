@@ -1,0 +1,27 @@
+<resources>
+    <string name="module_description">小米音乐灵动岛实时音频频谱</string>
+    <string name="settings_title">设置</string>
+    <string name="status_connected">框架已连接</string>
+    <string name="status_working">工作中</string>
+    <string name="status_disconnected">框架未连接</string>
+    <string name="status_ready">设置即时生效。</string>
+    <string name="activate_hint">请在 LSPosed 中启用 Miui Island Spectrum 并勾选 SystemUI，首次激活后重启目标进程。</string>
+    <string name="scope_hint">请在 LSPosed 的模块作用域中勾选 SystemUI。</string>
+    <string name="loading">正在加载设置…</string>
+    <string name="load_error">读取设置失败，请刷新重试。</string>
+    <string name="save_error">保存失败，已保留原设置。</string>
+    <string name="spectrum_title">音乐灵动岛</string>
+    <string name="color_scheme">颜色方案</string>
+    <string name="color_hyperos">优化原版取色方案</string>
+    <string name="color_ios">iOS 取色方案</string>
+    <string name="color_original">原版取色方案</string>
+    <string name="stop_when_muted">音量为 0 时停止波形</string>
+    <string name="stop_when_muted_summary">媒体音量为 0 时停止显示波形。（待实现）</string>
+    <string name="enable_spectrum">音频频谱</string>
+    <string name="enable_spectrum_summary">显示随音乐跳动的六条彩色频谱，关闭后恢复官方 Lottie 动画。</string>
+    <string name="about_title">关于</string>
+    <string name="about_app">关于 HyperSpectrum</string>
+    <string name="version">版本 %1$s</string>
+    <string name="about_description">版本 %1$s\n\n小米音乐灵动岛实时音频频谱。\n\n© 2026 wxxsfxyzm\nApache License 2.0\n\n界面基于 miuix，© compose-miuix-ui contributors，Apache License 2.0。</string>
+    <string name="got_it">知道了</string>
+</resources>

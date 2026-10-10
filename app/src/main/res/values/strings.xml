@@ -1,3 +1,29 @@
 <resources>
     <string name="module_description">Real audio spectrum for Xiaomi music island</string>
+    <string name="app_name" translatable="false">HyperSpectrum</string>
+    <string name="module_name" translatable="false">Miui Island Spectrum</string>
+    <string name="settings_title">Settings</string>
+    <string name="status_connected">Framework connected</string>
+    <string name="status_working">working</string>
+    <string name="status_disconnected">Framework not connected</string>
+    <string name="status_ready">Settings apply immediately.</string>
+    <string name="activate_hint">Enable Miui Island Spectrum in LSPosed and select SystemUI. Restart the target process after first activation.</string>
+    <string name="scope_hint">Select SystemUI in the module scope in LSPosed.</string>
+    <string name="loading">Loading settings…</string>
+    <string name="load_error">Could not load settings. Refresh to try again.</string>
+    <string name="save_error">Could not save. Your previous setting is kept.</string>
+    <string name="spectrum_title">Music island</string>
+    <string name="color_scheme">Color scheme</string>
+    <string name="color_hyperos">Optimized original</string>
+    <string name="color_ios">iOS</string>
+    <string name="color_original">Original</string>
+    <string name="stop_when_muted">Stop at volume 0</string>
+    <string name="stop_when_muted_summary">Stop the waveform when media volume is zero. (to be implemented)</string>
+    <string name="enable_spectrum">Audio spectrum</string>
+    <string name="enable_spectrum_summary">Show six colored bars following the music. Turn off to restore the official Lottie animation.</string>
+    <string name="about_title">About</string>
+    <string name="about_app">About HyperSpectrum</string>
+    <string name="version">Version %1$s</string>
+    <string name="about_description">Version %1$s\n\nAudio spectrum for the Xiaomi music island.\n\n© 2026 wxxsfxyzm\nApache License 2.0\n\nInterface built with miuix, © compose-miuix-ui contributors, Apache License 2.0.</string>
+    <string name="got_it">Got it</string>
 </resources>

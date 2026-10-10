@@ -6,6 +6,7 @@ import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
 }
 
 val gitCommitCount = providers.exec {
@@ -57,6 +58,7 @@ android {
 
     buildFeatures {
         buildConfig = true
+        compose = true
     }
 
     defaultConfig {
@@ -113,5 +115,13 @@ android {
 
 dependencies {
     compileOnly(libs.libxposed.api)
+    implementation(libs.libxposed.service)
+    implementation(libs.activity.compose)
+    implementation(libs.lifecycle.viewmodel.ktx)
+    implementation(libs.compose.foundation)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.miuix.glass)
+    implementation(libs.miuix.preference)
+    implementation(libs.compose.material.icons.extended)
     testImplementation(libs.junit)
 }

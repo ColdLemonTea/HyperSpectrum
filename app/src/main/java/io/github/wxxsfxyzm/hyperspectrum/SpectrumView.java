@@ -5,12 +5,16 @@ package io.github.wxxsfxyzm.hyperspectrum;
 
 import android.content.Context;
 import android.graphics.Canvas;
-import android.graphics.LinearGradient;
+import android.graphics.Bitmap;
+import android.graphics.BitmapShader;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Shader;
+import android.graphics.LinearGradient;
 import android.os.SystemClock;
 import android.view.View;
 import java.lang.reflect.Method;
+import java.util.Arrays;
 
 /** The same six bars persist through pause/resume, with a cover-scoped palette. */
 final class SpectrumView extends View {
@@ -24,8 +28,14 @@ final class SpectrumView extends View {
     private boolean allowed, aggregatedVisible, subscribed, ownsOriginal;
     private boolean disposed, drew, fallback = true, pauseSettled;
     private long lastDraw, lastData, awaitingSince;
-    private int top = CoverColors.TOP_DEFAULT, bottom = CoverColors.BOTTOM_DEFAULT;
-    private int fromTop = top, fromBottom = bottom, targetTop = top, targetBottom = bottom;
+    private final int[] colors = CoverColors.fallback();
+    private final int[] fromColors = colors.clone(), targetColors = colors.clone();
+    private final Bitmap colorBitmap = Bitmap.createBitmap(CoverColors.SIZE, CoverColors.SIZE, Bitmap.Config.ARGB_8888);
+    private Shader colorShader;
+    private boolean originalColors;
+    private final Matrix originalBounds = new Matrix();
+    private final Matrix colorBounds = new Matrix();
+    private boolean paletteDirty = true;
     private long colorStart;
     private final Runnable stale = this::stale;
 
@@ -59,16 +69,26 @@ final class SpectrumView extends View {
                 + " view=" + System.identityHashCode(this), null);
     }
 
-    void colors(int newTop, int newBottom) {
-        if (newTop == targetTop && newBottom == targetBottom) return;
+    void colors(int[] field, boolean original) {
+        if (field.length != CoverColors.COUNT) throw new IllegalArgumentException("Invalid color field");
+        if (originalColors == original && Arrays.equals(field, targetColors)) return;
         palette(SystemClock.uptimeMillis());
-        fromTop = top; fromBottom = bottom;
-        targetTop = newTop; targetBottom = newBottom;
+        originalColors = original;
+        System.arraycopy(colors, 0, fromColors, 0, colors.length);
+        System.arraycopy(field, 0, targetColors, 0, colors.length);
+        paletteDirty = true;
         colorStart = SystemClock.uptimeMillis(); invalidate();
     }
 
     void allow(boolean value) {
         allowed = value; reconcile();
+    }
+
+    void disable() {
+        // Resume the stock animation while this visible holder still owns its slot.
+        restoreOriginal(true);
+        allow(false);
+        invalidate();
     }
 
     private void reconcile() {
@@ -105,7 +125,10 @@ final class SpectrumView extends View {
         // A sustained failure is handled by the same 750 ms watchdog as missing FFT.
         if (!available) return;
         removeCallbacks(stale);
+        boolean recovering = motion.recovering();
         fallback = false; motion.frame(levels); lastData = time;
+        if (!recovering && motion.recovering()) reporter.report("spectrum_silence_recovery event=start"
+                + " durationMs=" + SpectrumMotion.RECOVERY_MS + " view=" + System.identityHashCode(this), null);
         suppressOriginal(); invalidate(); scheduleStale();
     }
 
@@ -146,6 +169,7 @@ final class SpectrumView extends View {
 
     void dispose(boolean restore) {
         allowed = false; disposed = true; removeCallbacks(stale);
+        paint.setShader(null);
         if (subscribed) { subscribed = false; lifecycle.active(this, false); }
         fallback = true;
         if (restore) {
@@ -154,19 +178,43 @@ final class SpectrumView extends View {
     }
 
     private boolean palette(long now) {
+        if (colorStart == 0 && !paletteDirty) return false;
         float t = colorStart == 0 ? 1 : Math.min(1, (now - colorStart) / 240f);
-        int newTop = CoverColors.blend(fromTop, targetTop, t);
-        int newBottom = CoverColors.blend(fromBottom, targetBottom, t);
-        if (paint.getShader() == null || newTop != top || newBottom != bottom) {
-            top = newTop; bottom = newBottom;
-            paint.setShader(new LinearGradient(0, 0, 0, Math.max(1, getHeight()),
-                    top, bottom, Shader.TileMode.CLAMP));
+        boolean changed = paletteDirty;
+        for (int i = 0; i < colors.length; i++) {
+            int color = CoverColors.blend(fromColors[i], targetColors[i], t);
+            changed |= color != colors[i]; colors[i] = color;
         }
+        if (changed) {
+            if (originalColors) {
+                // Stock musicWave moves its two-stop vertical gradient with each bar's height.
+                // Use the host's ARGB endpoints directly: no gray veil, saturation or alpha changes.
+                colorShader = new LinearGradient(0, 0, 0, 1, colors[0], colors[colors.length - 1], Shader.TileMode.CLAMP);
+            } else {
+                colorBitmap.setPixels(colors, 0, CoverColors.SIZE, 0, 0, CoverColors.SIZE, CoverColors.SIZE);
+                // BitmapShader can retain a native snapshot of a mutable bitmap. Refresh it only
+                // during a cover transition; steady audio frames reuse the completed shader.
+                BitmapShader bitmapShader = new BitmapShader(colorBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                bitmapShader.setFilterMode(BitmapShader.FILTER_MODE_LINEAR);
+                colorShader = bitmapShader;
+                colorShader.setLocalMatrix(colorBounds);
+            }
+            paint.setShader(colorShader);
+        }
+        paletteDirty = false;
+        if (t >= 1) colorStart = 0;
         return t < 1;
     }
 
     @Override protected void onSizeChanged(int w, int h, int oldW, int oldH) {
-        paint.setShader(null); super.onSizeChanged(w, h, oldW, oldH);
+        float density = getResources().getDisplayMetrics().density;
+        float width = Math.max(1, Math.min(w * 0.82f, 22 * density));
+        // One fixed field spans the rectangle when all six bars are fully extended.
+        // A shorter bar clips this field; its current height never stretches the colors.
+        colorBounds.setScale(width / CoverColors.SIZE, Math.max(1, h) / (float) CoverColors.SIZE);
+        colorBounds.postTranslate((w - width) * 0.5f, 0);
+        if (colorShader != null && !originalColors) colorShader.setLocalMatrix(colorBounds);
+        super.onSizeChanged(w, h, oldW, oldH);
     }
 
     @Override protected void onDraw(Canvas canvas) {
@@ -176,7 +224,10 @@ final class SpectrumView extends View {
         if (motion.isPlaying() && now - Math.max(lastData, awaitingSince) >= 750) { stale(); return; }
         boolean colorMoving = palette(now);
         float elapsed = lastDraw == 0 ? 16 : Math.min(64, now - lastDraw); lastDraw = now;
+        boolean recovering = motion.recovering();
         boolean moving = motion.advance(elapsed);
+        if (recovering && !motion.recovering()) reporter.report("spectrum_silence_recovery event=finished"
+                + " view=" + System.identityHashCode(this), null);
         float density = getResources().getDisplayMetrics().density;
         float width = Math.min(getWidth() * 0.82f, 22 * density);
         float bar = width / (SpectrumDsp.BARS + (SpectrumDsp.BARS - 1) * 0.65f);
@@ -188,6 +239,11 @@ final class SpectrumView extends View {
         for (float level : motion.heights) {
             float height = minHeight + (maxHeight - minHeight) * level;
             float y = (getHeight() - height) * 0.5f;
+            if (originalColors && colorShader != null) {
+                originalBounds.setScale(1, height);
+                originalBounds.postTranslate(0, y);
+                colorShader.setLocalMatrix(originalBounds);
+            }
             canvas.drawRoundRect(left, y, left + bar, y + height, bar * 0.5f, bar * 0.5f, paint);
             left += bar + gap;
         }
@@ -195,7 +251,7 @@ final class SpectrumView extends View {
             drew = true; int[] xy = new int[2]; getLocationOnScreen(xy);
             reporter.report("spectrum_view_draw x=" + xy[0] + " y=" + xy[1]
                     + " width=" + getWidth() + " height=" + getHeight()
-                    + " maxBarHeight=" + maxHeight, null);
+                    + " maxBarHeight=" + maxHeight + " colorMapping=full_spectrum", null);
         }
         if (!motion.isPlaying() && !moving && !pauseSettled) {
             pauseSettled = true;

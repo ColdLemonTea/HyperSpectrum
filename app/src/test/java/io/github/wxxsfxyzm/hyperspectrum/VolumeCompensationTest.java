@@ -93,6 +93,81 @@ public class VolumeCompensationTest {
         assertFalse(c.settling(2300));
     }
 
+    @Test public void volumeTransitionProtectsTheMeasuredEnvelopeFromMixedRmsFalsePeaks() {
+        VolumeCompensation c = new VolumeCompensation();
+        c.target(VolumeCompensation.gain(SOFTWARE, -20, 0), 1000, true);
+        double reference = Math.pow(10, -4000 / 2000.0) * c.captureGain(1000, true, -4000, 2);
+        c.target(VolumeCompensation.gain(SOFTWARE, -40, 0), 1100, false);
+        for (int rms : new int[]{-4000, -5000, -6000}) {
+            double actual = Math.pow(10, rms / 2000.0) * c.captureGain(1200, true, rms, 2);
+            assertEquals(reference, actual, 0.00000001);
+        }
+        double settled = Math.pow(10, -6000 / 2000.0) * c.captureGain(2000, true, -6000, 2);
+        assertEquals(reference, settled, 0.00001);
+        double quiet = Math.pow(10, -8000 / 2000.0) * c.captureGain(2050, true, -8000, 2);
+        assertEquals(reference * 0.1, quiet, 0.00001);
+    }
+
+    @Test public void repeatedVolumeChangesStillAnalyzeFreshFrequencyContent() {
+        VolumeCompensation c = new VolumeCompensation();
+        c.target(VolumeCompensation.gain(SOFTWARE, -20, 0), 1000, true);
+        c.captureGain(1000, true, -4000, 1);
+        SpectrumDsp dsp = new SpectrumDsp(1024);
+        for (int frame = 0; frame < 24; frame++) {
+            long now = 1100 + frame * 50;
+            if (frame % 4 == 0) c.target(VolumeCompensation.gain(SOFTWARE,
+                    frame % 8 == 0 ? -40 : -20, 0), now, false);
+            assertTrue(c.settling(now));
+            int band = frame % 2 == 0 ? 0 : 3;
+            byte[] wave = SpectrumDspTest.tones(1024, new int[]{band == 0 ? 2 : 36}, new double[]{0.7});
+            int rms = frame % 3 == 0 ? -4000 : -6000;
+            float[] levels = dsp.levels(wave, 48000000, true, rms, false,
+                    c.captureGain(now, true, rms, 1));
+            assertTrue("The live frequency must remain visible", levels[band] > 0.04f);
+            assertTrue("Previous frequency content must disappear", levels[band == 0 ? 3 : 0] < 0.001f);
+        }
+    }
+
+    @Test public void transitionEnvelopeCannotCreateSignalFromSilentRmsOrPcm() {
+        VolumeCompensation c = new VolumeCompensation();
+        c.target(VolumeCompensation.gain(SOFTWARE, -20, 0), 1000, true);
+        c.captureGain(1000, true, -4000, 1);
+        c.target(VolumeCompensation.gain(SOFTWARE, -40, 0), 1100, false);
+        SpectrumDsp dsp = new SpectrumDsp(1024);
+        byte[] wave = SpectrumDspTest.tones(1024, new int[]{2}, new double[]{0.7});
+        assertArrayEquals(new float[6], dsp.levels(wave, 48000000, true, -9600, false,
+                c.captureGain(1200, true, -9600, 1)), 0);
+        byte[] silence = new byte[1024]; java.util.Arrays.fill(silence, (byte) 128);
+        assertArrayEquals(new float[6], dsp.levels(silence, 48000000, true, -4000, false,
+                c.captureGain(1250, true, -4000, 1)), 0);
+    }
+
+    @Test public void captureOrRouteResetAndAsPlayedDiscardThePreviousEnvelope() {
+        VolumeCompensation c = new VolumeCompensation();
+        c.target(3.5, 1000, true); c.captureGain(1000, true, -4000, 2);
+        c.target(35, 1100, false); c.resetEnvelope();
+        assertEquals(c.value(1200) * 2, c.captureGain(1200, true, -4000, 2), 0);
+        c.target(0.35, 1300, true);
+        assertEquals(0.35, c.captureGain(1300, true, -2000, 1), 0);
+        c.target(35, 1400, false);
+        assertEquals(c.value(1500) * 2, c.captureGain(1500, false, -9600, 2), 0);
+        assertEquals(c.value(1550) * 2, c.captureGain(1550, true, -4000, 2), 0);
+    }
+
+    @Test public void unmuteDiscardsNearZeroEnvelopeEvenIfNewAudioArrivesBeforeTheVolumePoll() {
+        VolumeCompensation c = new VolumeCompensation();
+        c.target(VolumeCompensation.DISPLAY_GAIN, 1000, true, true);
+        c.captureGain(1000, true, -9600, 2);
+        // New audio can precede the next 200 ms volume query, at the old mute gain.
+        c.captureGain(1100, true, -8000, 2);
+        double gain = VolumeCompensation.gain(SOFTWARE, -40, 0);
+        c.target(gain, 1200, false, false);
+        assertFalse("Unmute must not retain the tiny old envelope for 500 ms", c.settling(1200));
+        assertEquals(gain * 2, c.captureGain(1200, true, -6000, 2), 0);
+        c.target(VolumeCompensation.gain(SOFTWARE, -30, 0), 1400, false, false);
+        assertTrue("Normal nonzero volume changes still protect mixed RMS", c.settling(1400));
+    }
+
     @Test public void normalizedAndAsPlayedApplyOneCommonGainBeforeTheDisplayCurve() {
         byte[] wave = SpectrumDspTest.tones(1024, new int[]{2, 7, 16, 36, 68, 171},
                 new double[]{0.4, 0.2, 0.1, 0.03, 0.02, 0.01});

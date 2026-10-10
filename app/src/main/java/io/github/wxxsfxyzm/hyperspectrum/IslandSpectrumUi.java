@@ -8,6 +8,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.drawable.Icon;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
@@ -41,10 +42,12 @@ final class IslandSpectrumUi {
     private volatile boolean closed;
     private volatile Object[][] reloadState;
     private boolean playing, interactive = true;
+    private boolean enabled = SpectrumPreferences.DEFAULT_ENABLED;
     private String key;
     private Context context;
     private boolean screenRegistered;
-    private int topColor = CoverColors.TOP_DEFAULT, bottomColor = CoverColors.BOTTOM_DEFAULT;
+    private int[] coverColors = CoverColors.fallback();
+    private boolean originalColors, originalSeeded;
     private final BroadcastReceiver screen = new BroadcastReceiver() {
         @Override public void onReceive(Context ctx, Intent intent) {
             interactive = Intent.ACTION_SCREEN_ON.equals(intent.getAction()); demand();
@@ -56,9 +59,10 @@ final class IslandSpectrumUi {
         engine = new LiveSpectrum(reporter, main, (levels, time, healthy) -> {
             if (!closed) for (SpectrumView view : new ArrayList<>(active)) view.frame(levels, time, healthy);
         });
-        palette = new ArtworkPalette(engine::execute, main, (top, bottom) -> {
-            topColor = top; bottomColor = bottom;
-            for (Slot slot : slots.values()) slot.view.colors(top, bottom);
+        palette = new ArtworkPalette(engine::execute, main, (colors, original) -> {
+            coverColors = colors;
+            originalColors = original;
+            for (Slot slot : slots.values()) slot.view.colors(colors, original);
         }, reporter);
     }
 
@@ -66,6 +70,27 @@ final class IslandSpectrumUi {
         if (Looper.myLooper() == Looper.getMainLooper()) { if (!closed) action.run(); }
         else main.post(() -> { if (!closed) action.run(); });
     }
+
+    void enabled(boolean value) {
+        main(() -> {
+            if (enabled == value) return;
+            enabled = value;
+            for (Slot slot : slots.values()) {
+                if (value) slot.view.allow(slot.shown);
+                else slot.view.disable();
+            }
+            demand();
+            reporter.report("spectrum_enabled value=" + value + " slots=" + slots.size(), null);
+        });
+    }
+
+    void colorScheme(String value) { main(() -> palette.scheme(value)); }
+
+    void originalColors(long cover, int top, int bottom) {
+        main(() -> palette.original(cover, top, bottom));
+    }
+
+    void stopWhenMuted(boolean value) { engine.stopWhenMuted(value); }
 
     void media(Context ctx, String notificationKey, Boolean isPlaying, String route,
                String packageName, int userId, String track, Icon artwork) {
@@ -103,6 +128,7 @@ final class IslandSpectrumUi {
 
     private void apply(Object holder, String event) {
         try {
+            seedOriginalColors(holder);
             Slot slot = slots.get(holder);
             if (event.equals("onDetach")) { remove(holder, false); return; }
             if (event.equals("onHidden")) {
@@ -121,7 +147,7 @@ final class IslandSpectrumUi {
                         (v, enabled) -> { if (enabled) active.add(v); else active.remove(v); demand(); }, reporter);
                 slot = new Slot(holder, original, view);
                 slots.put(holder, slot);
-                view.colors(topColor, bottomColor);
+                view.colors(coverColors, originalColors);
                 view.playing(pic.equals("musicWave"));
                 container.addView(view, new FrameLayout.LayoutParams((FrameLayout.LayoutParams) original.getLayoutParams()));
                 reporter.report("spectrum_view_install holder=" + System.identityHashCode(holder)
@@ -129,7 +155,7 @@ final class IslandSpectrumUi {
             }
             if (event.equals("onShow")) slot.shown = true;
             slot.view.playing(pic.equals("musicWave"));
-            slot.view.allow(slot.shown);
+            slot.view.allow(enabled && slot.shown);
             slot.view.suppressOriginal(); // Also catches the end of asynchronous Lottie composition.
         } catch (ReflectiveOperationException | RuntimeException failure) {
             reporter.report("spectrum_view_error stage=bind", failure);
@@ -137,11 +163,37 @@ final class IslandSpectrumUi {
         }
     }
 
+    private void seedOriginalColors(Object holder) {
+        if (originalSeeded) return;
+        try {
+            Bundle bundle = (Bundle) holder.getClass().getMethod("getBitmapBundle").invoke(holder);
+            Icon album = bundle == null ? null : bundle.getParcelable("miui_media_album_icon", Icon.class);
+            if (album == null) return;
+            int top = ((Number) field(holder, "gradientTopColor")).intValue();
+            int bottom = ((Number) field(holder, "gradientBottomColor")).intValue();
+            if ((top >>> 24) != 153 || (bottom >>> 24) != 153) return;
+            originalSeeded = true;
+            Context ctx = (Context) holder.getClass().getMethod("getContext").invoke(holder);
+            engine.execute(() -> {
+                try {
+                    android.graphics.drawable.Drawable drawable = album.loadDrawable(ctx);
+                    if (drawable == null) return;
+                    long cover = OriginalArtwork.fingerprint(drawable);
+                    originalColors(cover, top, bottom);
+                    reporter.report("spectrum_original_backfill cover=" + cover + " top=" + Integer.toHexString(top)
+                            + " bottom=" + Integer.toHexString(bottom), null);
+                } catch (RuntimeException failure) { reporter.report("spectrum_original_backfill_error", failure); }
+            });
+        } catch (ReflectiveOperationException | RuntimeException failure) {
+            reporter.report("spectrum_original_backfill_unavailable", failure);
+        }
+    }
+
     private void demand() {
         if (!closed) {
             int count = 0;
             for (SpectrumView view : active) if (view.wantsAudio()) count++;
-            engine.demand(playing && interactive && count > 0, count);
+            engine.demand(enabled && playing && interactive && count > 0, count);
         }
     }
 

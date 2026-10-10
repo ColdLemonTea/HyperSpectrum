@@ -4,6 +4,8 @@
 package io.github.wxxsfxyzm.hyperspectrum;
 
 import android.content.Context;
+import android.content.SharedPreferences;
+import android.graphics.Bitmap;
 import android.graphics.drawable.Icon;
 import android.os.Process;
 import android.util.Log;
@@ -36,6 +38,29 @@ public final class SpectrumModule extends XposedModule {
     private volatile boolean retired;
     private Object lastController;
     private Object lastMedia;
+    private SharedPreferences preferences;
+    private boolean enabled = SpectrumPreferences.DEFAULT_ENABLED;
+    private final SharedPreferences.OnSharedPreferenceChangeListener preferenceListener = (prefs, key) -> {
+        if (key == null || SpectrumPreferences.ENABLED.equals(key)
+                || SpectrumPreferences.COLOR_SCHEME.equals(key) || SpectrumPreferences.STOP_WHEN_MUTED.equals(key)) readPreferences();
+    };
+
+    private synchronized void readPreferences() {
+        if (retired || preferences == null) return;
+        try {
+            enabled = preferences.getBoolean(SpectrumPreferences.ENABLED, SpectrumPreferences.DEFAULT_ENABLED);
+            String scheme = SpectrumPreferences.colorScheme(preferences.getString(SpectrumPreferences.COLOR_SCHEME, SpectrumPreferences.DEFAULT_COLOR_SCHEME));
+            boolean stopWhenMuted = preferences.getBoolean(SpectrumPreferences.STOP_WHEN_MUTED, SpectrumPreferences.DEFAULT_STOP_WHEN_MUTED);
+            if (ui != null) {
+                ui.enabled(enabled);
+                ui.colorScheme(scheme);
+                ui.stopWhenMuted(stopWhenMuted);
+            }
+            report("spectrum_setting enabled=" + enabled + " colorScheme=" + scheme + " stopWhenMuted=" + stopWhenMuted, null);
+        } catch (RuntimeException failure) {
+            report("spectrum_settings_unavailable", failure);
+        }
+    }
 
     private void report(String message, Throwable failure) {
         String tagged = "build=" + BuildConfig.PROBE_BUILD + " pid=" + Process.myPid() + " " + message;
@@ -53,9 +78,23 @@ public final class SpectrumModule extends XposedModule {
 
     private synchronized void ensureProbe() {
         if (retired) return;
+        if (preferences == null) {
+            try {
+                preferences = getRemotePreferences(SpectrumPreferences.GROUP);
+                preferences.registerOnSharedPreferenceChangeListener(preferenceListener);
+                readPreferences();
+            } catch (RuntimeException failure) {
+                preferences = null;
+                report("spectrum_settings_unavailable", failure);
+            }
+        }
         if (BuildConfig.DIAGNOSTIC_MODE) {
             if (probe == null) probe = new CaptureProbe(this::report);
-        } else if (ui == null) ui = new IslandSpectrumUi(this::report);
+        } else if (ui == null) {
+            ui = new IslandSpectrumUi(this::report);
+            ui.enabled(enabled);
+            readPreferences();
+        }
     }
 
     @Override public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
@@ -90,10 +129,11 @@ public final class SpectrumModule extends XposedModule {
         for (String name : new String[]{"playAnimation", "registerLottieCallback"}) {
             installMethod(loader, HOLDER, name, "animation");
         }
+        installMethod(loader, HOLDER, "getLottieColor", "palette", "android.graphics.Bitmap");
         // Keep the small registerLottieCallback hook observable in its asynchronous caller.
         try {
             for (Method method : Class.forName(HOLDER, false, loader).getDeclaredMethods()) {
-                if (method.getName().equals("playAnimation$lambda$4")) deoptimize(method);
+                if (method.getName().equals("playAnimation$lambda$4") || method.getName().equals("access$getLottieColor")) deoptimize(method);
             }
         } catch (ClassNotFoundException ignored) { }
         }
@@ -112,7 +152,8 @@ public final class SpectrumModule extends XposedModule {
             Class<?> type = Class.forName(owner, false, loader);
             Method target = null;
             for (Method method : type.getDeclaredMethods()) {
-                if (!method.getName().equals(name) || method.getReturnType() != void.class) continue;
+                if (!method.getName().equals(name)) continue;
+                if ("palette".equals(role) ? method.getReturnType().isPrimitive() : method.getReturnType() != void.class) continue;
                 Class<?>[] actual = method.getParameterTypes();
                 if (actual.length != parameters.length) continue;
                 boolean matches = true;
@@ -137,7 +178,7 @@ public final class SpectrumModule extends XposedModule {
             Object result = chain.proceed(); // Never retry or swallow an original SystemUI exception.
             try {
                 synchronized (this) {
-                    if (!retired) after(role, chain);
+                    if (!retired) after(role, chain, result);
                 }
             } catch (ReflectiveOperationException | RuntimeException failure) {
                 report("observer_error role=" + role, failure);
@@ -146,8 +187,17 @@ public final class SpectrumModule extends XposedModule {
         };
     }
 
-    private void after(String role, XposedInterface.Chain chain) throws ReflectiveOperationException {
+    private void after(String role, XposedInterface.Chain chain, Object result) throws ReflectiveOperationException {
         switch (role) {
+            case "palette":
+                if (ui != null && result != null && chain.getArg(0) instanceof Bitmap bitmap) {
+                    int top = pairColor(result, true), bottom = pairColor(result, false);
+                    long cover = OriginalArtwork.fingerprint(bitmap);
+                    ui.originalColors(cover, top, bottom);
+                    report("spectrum_original_colors cover=" + cover + " top=" + Integer.toHexString(top)
+                            + " bottom=" + Integer.toHexString(bottom), null);
+                }
+                break;
             case "media":
                 lastController = chain.getThisObject(); lastMedia = chain.getArg(2);
                 observe(lastController, lastMedia, false);
@@ -185,6 +235,13 @@ public final class SpectrumModule extends XposedModule {
         }
     }
 
+    private static int pairColor(Object pair, boolean first) throws ReflectiveOperationException {
+        try { return ((Number) field(pair, first ? "a" : "b")).intValue(); }
+        catch (NoSuchFieldException missing) {
+            return ((Number) pair.getClass().getMethod(first ? "getFirst" : "getSecond").invoke(pair)).intValue();
+        }
+    }
+
     private void observe(Object controller, Object media, boolean force) throws ReflectiveOperationException {
         if (controller == null || media == null) return;
         ensureProbe();
@@ -218,6 +275,10 @@ public final class SpectrumModule extends XposedModule {
         IslandSpectrumUi oldUi;
         synchronized (this) {
             retired = true; // In-flight old chain snapshots become passive before resource teardown.
+            if (preferences != null) {
+                preferences.unregisterOnSharedPreferenceChangeListener(preferenceListener);
+                preferences = null;
+            }
             if (probe != null) probe.close();
             probe = null; oldUi = ui;
         }
@@ -277,7 +338,7 @@ public final class SpectrumModule extends XposedModule {
                 "spectrum_animation_registerLottieCallback"));
         report("hot_reloaded process=" + param.getProcessName() + " replaced=" + replaced
                 + " hooks=" + handles.size() + " mediaReady=" + mediaReady
-                + " renderReady=" + renderReady, null);
+                + " renderReady=" + renderReady + " originalColorReady=" + ids.contains("spectrum_palette_getLottieColor"), null);
     }
 
     private static String role(String id) {
@@ -291,6 +352,7 @@ public final class SpectrumModule extends XposedModule {
                     "spectrum_holder_onShow", "spectrum_holder_onHidden", "spectrum_holder_onDetach" -> "holder";
             case "spectrum_plugin_onPluginLoaded" -> "plugin";
             case "spectrum_animation_playAnimation", "spectrum_animation_registerLottieCallback" -> "animation";
+            case "spectrum_palette_getLottieColor" -> "palette";
             default -> null;
         };
     }
