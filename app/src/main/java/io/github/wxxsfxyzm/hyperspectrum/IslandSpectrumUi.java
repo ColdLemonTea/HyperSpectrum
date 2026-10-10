@@ -67,7 +67,8 @@ final class IslandSpectrumUi {
         else main.post(() -> { if (!closed) action.run(); });
     }
 
-    void media(Context ctx, String notificationKey, Boolean isPlaying, String route, String track, Icon artwork) {
+    void media(Context ctx, String notificationKey, Boolean isPlaying, String route,
+               String packageName, int userId, String track, Icon artwork) {
         main(() -> {
             if (context == null) {
                 context = ctx;
@@ -86,6 +87,7 @@ final class IslandSpectrumUi {
             key = notificationKey;
             playing = Boolean.TRUE.equals(isPlaying)
                     && (route.isEmpty() || route.equals("local") || route.equals("headset"));
+            engine.media(packageName, userId);
             palette.artwork(ctx, track, artwork);
             demand();
         });

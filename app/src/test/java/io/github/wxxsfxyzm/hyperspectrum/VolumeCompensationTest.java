@@ -15,6 +15,38 @@ public class VolumeCompensationTest {
         }
     }
 
+    @Test public void absoluteVolumeRecoversOnlyMeasuredPhoneSideAttenuation() {
+        double expected = VolumeCompensation.DISPLAY_GAIN * Math.pow(10, 6.0 / 20);
+        for (float headphoneDb : new float[]{-60, -20, -10, -0.5f}) {
+            assertEquals(expected, VolumeCompensation.appliedGain(EXTERNAL, headphoneDb, -0.5f, -6.5f), 0.00000001);
+        }
+        VolumeCompensation c = new VolumeCompensation();
+        c.target(VolumeCompensation.appliedGain(EXTERNAL, -20, -0.5f, -6.5f), 1000, true);
+        c.target(VolumeCompensation.appliedGain(EXTERNAL, -10, -0.5f, -6.5f), 1100, false);
+        assertFalse(c.settling(1100));
+    }
+
+    @Test public void appliedSoftwareCurveReplacesTheNominalInverseRatherThanMultiplyingIt() {
+        assertEquals(VolumeCompensation.gain(SOFTWARE, -31, -0.5f),
+                VolumeCompensation.appliedGain(SOFTWARE, -20, -0.5f, -31), 0);
+        assertEquals(VolumeCompensation.gain(SOFTWARE, -20, -0.5f),
+                VolumeCompensation.appliedGain(SOFTWARE, -20, -0.5f, Float.NaN), 0);
+        assertEquals(VolumeCompensation.DISPLAY_GAIN,
+                VolumeCompensation.appliedGain(UNKNOWN, -20, -0.5f, -31), 0);
+    }
+
+    @Test public void fixedAndVariableBluetoothAttenuationPreserveTheSameSixSourceBands() {
+        byte[] wave = SpectrumDspTest.tones(1024, new int[]{2, 7, 16, 36, 68, 171},
+                new double[]{0.4, 0.2, 0.1, 0.03, 0.02, 0.01});
+        SpectrumDsp dsp = new SpectrumDsp(1024);
+        float[] reference = dsp.levels(wave, 48000000, true, -1450, false, VolumeCompensation.DISPLAY_GAIN);
+        for (float appliedDb : new float[]{-6.5f, -11.9f, -20, -31, -45}) {
+            double gain = VolumeCompensation.appliedGain(EXTERNAL, -20, -0.5f, appliedDb);
+            assertArrayEquals(reference, dsp.levels(wave, 48000000, true,
+                    -1450 + Math.round((appliedDb + 0.5f) * 100), false, gain), 0.00001f);
+        }
+    }
+
     @Test public void softwareVolumeIsUndoneRelativeToItsMaximum() {
         double reference = VolumeCompensation.DISPLAY_GAIN;
         assertEquals(reference * Math.pow(10, 12 / 20.0), VolumeCompensation.gain(SOFTWARE, -15, -3), 0.000001);

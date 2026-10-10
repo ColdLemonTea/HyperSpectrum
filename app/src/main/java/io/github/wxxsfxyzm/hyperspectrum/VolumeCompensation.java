@@ -24,6 +24,15 @@ final class VolumeCompensation {
         return Math.min(MAX_GAIN, DISPLAY_GAIN * Math.pow(10, (maximumDb - volumeDb) / 20.0));
     }
 
+    static double appliedGain(CaptureVolume mode, float volumeDb, float maximumDb, float appliedDb) {
+        // Policy metadata replaces the nominal curve. It must never be multiplied by its inverse
+        // again. Absolute-volume routes can still have fixed phone-side attenuation (e.g. CE).
+        if (mode != CaptureVolume.UNKNOWN && Float.isFinite(appliedDb)) {
+            return gain(CaptureVolume.SOFTWARE, appliedDb, maximumDb);
+        }
+        return gain(mode, volumeDb, maximumDb);
+    }
+
     void target(double gain, long now, boolean reset) {
         gain = Double.isFinite(gain) ? Math.max(0, Math.min(MAX_GAIN, gain)) : DISPLAY_GAIN;
         // RMS averages old and new mixer buffers. Do not multiply that mixed window

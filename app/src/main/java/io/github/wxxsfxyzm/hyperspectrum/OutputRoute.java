@@ -7,6 +7,7 @@ import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
 import android.os.flagging.AconfigPackage;
+import android.os.SystemClock;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.util.List;
@@ -16,6 +17,7 @@ final class OutputRoute {
     private static final AudioAttributes MEDIA = new AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build();
     private final AudioManager audio;
+    private final AppliedVolume appliedVolume;
     private Constructor<?> attributes;
     private Method behavior;
     private Boolean noPrescale, indexFix;
@@ -25,21 +27,25 @@ final class OutputRoute {
         final int type, behavior, volume, maximum;
         final boolean muted;
         final float volumeDb, maximumDb;
+        final float appliedDb;
+        final int policyOutput;
         final VolumeCompensation.CaptureVolume mode;
 
         State(String key, String reason, int type, int behavior, int volume, int maximum,
-              boolean muted, float volumeDb, float maximumDb, VolumeCompensation.CaptureVolume mode) {
+              boolean muted, float volumeDb, float maximumDb, VolumeCompensation.CaptureVolume mode,
+              float appliedDb, int policyOutput) {
             this.key = key; this.reason = reason; this.type = type; this.behavior = behavior;
             this.volume = volume; this.maximum = maximum; this.muted = muted;
             this.volumeDb = volumeDb; this.maximumDb = maximumDb; this.mode = mode;
+            this.appliedDb = appliedDb; this.policyOutput = policyOutput;
         }
 
-        double gain() { return VolumeCompensation.gain(mode, volumeDb, maximumDb); }
+        double gain() { return VolumeCompensation.appliedGain(mode, volumeDb, maximumDb, appliedDb); }
     }
 
-    OutputRoute(AudioManager audio) { this.audio = audio; }
+    OutputRoute(AudioManager audio) { this.audio = audio; appliedVolume = new AppliedVolume(); }
 
-    State read() {
+    State read(int uid, int captureSession, long generation) {
         int volume = audio.getStreamVolume(AudioManager.STREAM_MUSIC);
         int maximum = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
         boolean muted = volume <= 0 || audio.isStreamMute(AudioManager.STREAM_MUSIC);
@@ -47,6 +53,8 @@ final class OutputRoute {
         String reason = "route_unavailable";
         int type = 0, volumeBehavior = -1;
         float db = Float.NaN, maxDb = Float.NaN;
+        float appliedDb = Float.NaN;
+        int policyOutput = -1;
         VolumeCompensation.CaptureVolume mode = VolumeCompensation.CaptureVolume.UNKNOWN;
         try {
             List<AudioDeviceInfo> devices = audio.getAudioDevicesForAttributes(MEDIA);
@@ -98,12 +106,20 @@ final class OutputRoute {
                     mode = VolumeCompensation.CaptureVolume.UNKNOWN;
                     reason = "invalid_volume_curve";
                 }
+                if (type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+                        && mode != VolumeCompensation.CaptureVolume.UNKNOWN) {
+                    PolicyVolume.Reading applied = appliedVolume.read(key, device.getAddress(), volume,
+                            uid, captureSession, generation, SystemClock.uptimeMillis());
+                    appliedDb = applied.db(); policyOutput = applied.output();
+                    reason += "+policy_" + applied.reason();
+                }
             }
         } catch (ReflectiveOperationException | RuntimeException | LinkageError failure) {
             // Retry on later queries; one unsupported call must not disable volume/mute checks.
             mode = VolumeCompensation.CaptureVolume.UNKNOWN;
             reason = "query_" + failure.getClass().getSimpleName();
         }
-        return new State(key, reason, type, volumeBehavior, volume, maximum, muted, db, maxDb, mode);
+        return new State(key, reason, type, volumeBehavior, volume, maximum, muted, db, maxDb, mode,
+                appliedDb, policyOutput);
     }
 }

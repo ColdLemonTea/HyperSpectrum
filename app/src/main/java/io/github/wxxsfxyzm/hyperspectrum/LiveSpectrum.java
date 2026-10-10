@@ -29,6 +29,11 @@ final class LiveSpectrum {
     private boolean deliveryQueued;
     private int subscribers;
     private AudioManager audio;
+    private PlaybackSource playbackSource;
+    private PlaybackSource.State source;
+    private int captureSession;
+    private int sourceChannels, captureChannels;
+    private double channelGain = 1;
     private OutputRoute outputRoute;
     private OutputRoute.State output;
     private final VolumeCompensation compensation = new VolumeCompensation();
@@ -68,17 +73,48 @@ final class LiveSpectrum {
         execute(() -> {
             audio = context.getSystemService(AudioManager.class);
             outputRoute = audio == null ? null : new OutputRoute(audio);
+            playbackSource = audio == null ? null : new PlaybackSource(context, audio);
         });
+    }
+
+    void media(String packageName, int userId) {
+        execute(() -> {
+            if (playbackSource == null) return;
+            try { playbackSource.media(packageName, userId); }
+            catch (ReflectiveOperationException | RuntimeException failure) {
+                reporter.report("spectrum_media_uid_unavailable", failure);
+            }
+        });
+    }
+
+    private boolean source() {
+        PlaybackSource.State next;
+        Throwable error = null;
+        try {
+            next = playbackSource == null ? new PlaybackSource.State(-1, -1, false, "audio_unavailable")
+                    : playbackSource.read();
+        } catch (ReflectiveOperationException | RuntimeException failure) {
+            next = new PlaybackSource.State(-1, -1, false, "query_" + failure.getClass().getSimpleName());
+            error = failure;
+        }
+        boolean changed = !next.equals(source);
+        if (changed) reporter.report("spectrum_source sessionId=" + next.sessionId() + " uid=" + next.uid()
+                + " spatial=" + next.spatial() + " reason=" + next.reason()
+                + " sourceChannels=" + next.sourceChannels() + " captureChannels=" + next.captureChannels(), error);
+        source = next;
+        return changed;
     }
 
     private boolean volume(long now, boolean force) {
         if (outputRoute == null || (!force && now - lastVolume < 200)) return false;
         lastVolume = now;
         try {
-            OutputRoute.State next = outputRoute.read();
+            OutputRoute.State next = outputRoute.read(source == null ? -1 : source.uid(),
+                    visualizer == null ? -1 : captureSession, generation);
             boolean changed = output != null && (!output.key.equals(next.key) || output.mode != next.mode);
             boolean log = output == null || changed || output.volume != next.volume
-                    || output.muted != next.muted || !output.reason.equals(next.reason);
+                    || output.muted != next.muted || !output.reason.equals(next.reason)
+                    || Float.compare(output.appliedDb, next.appliedDb) != 0;
             output = next;
             volume = next.volume; maxVolume = next.maximum; muted = next.muted;
             double gain = BuildConfig.ROUTE_COMPENSATION ? next.gain() : 1;
@@ -87,6 +123,7 @@ final class LiveSpectrum {
                     + " captureVolume=" + next.mode + " reason=" + next.reason
                     + " volume=" + volume + "/" + maxVolume + " muted=" + muted
                     + " volumeDb=" + next.volumeDb + " maximumDb=" + next.maximumDb
+                    + " appliedDb=" + next.appliedDb + " policyOutput=" + next.policyOutput
                     + " desiredGain=" + next.gain() + " compensation=" + BuildConfig.ROUTE_COMPENSATION, null);
             return changed;
         } catch (RuntimeException failure) {
@@ -109,7 +146,8 @@ final class LiveSpectrum {
                 if (!enabled) { stop("no_visible_playback"); return; }
                 if (visualizer == null) {
                     volume(SystemClock.uptimeMillis(), true);
-                    start(false);
+                    source();
+                    if (source.sessionId() >= 0) start(false);
                 }
                 worker.removeCallbacks(outputPoll);
                 worker.postDelayed(outputPoll, 200);
@@ -121,18 +159,21 @@ final class LiveSpectrum {
         if (closed || !demanded) return;
         long now = SystemClock.uptimeMillis();
         boolean changed = volume(now, false);
-        if (changed) {
-            stop("output_changed", false);
+        boolean sourceChanged = source();
+        if (changed || sourceChanged) {
+            stop(sourceChanged ? "capture_source_changed" : "output_changed", source.sessionId() < 0);
             retryAfter = 0;
         }
-        if (visualizer == null && now >= retryAfter) start(changed);
+        if (visualizer == null && source.sessionId() >= 0 && now >= retryAfter) start(changed || sourceChanged);
         worker.postDelayed(outputPoll, 200);
     }
 
     private void start(boolean keepFrame) {
         long session = ++generation;
         try {
-            visualizer = new Visualizer(0);
+            captureSession = source.sessionId();
+            sourceChannels = source.sourceChannels(); captureChannels = source.captureChannels();
+            visualizer = new Visualizer(captureSession);
             check(visualizer.setEnabled(false));
             int[] range = Visualizer.getCaptureSizeRange();
             int size = 1024;
@@ -164,7 +205,8 @@ final class LiveSpectrum {
                                 lastFrame = now; queueDelivery(); return;
                             }
                             long computeStart = SystemClock.elapsedRealtimeNanos();
-                            outputGain = compensation.value(now);
+                            channelGain = CaptureChannels.gain(sourceChannels, captureChannels, normalized);
+                            outputGain = compensation.value(now) * channelGain;
                             // Stream mute is a playback setting. Render any real captured signal;
                             // actual silent PCM and pause are handled by the DSP and view lifecycle.
                             latest = dsp.levels(bytes, rate, normalized, measurement.mRms, false, outputGain);
@@ -196,12 +238,14 @@ final class LiveSpectrum {
                                 nearTopPercent[i] = nearTop[i] * 100f / windowFrames;
                             }
                             reporter.report("live_capture_tick generation=" + generation
+                                    + " sessionId=" + captureSession
                                     + " frames=" + frames + " subscribers=" + subscribers
                                     + " volume=" + volume + "/" + maxVolume + " muted=" + muted
                                     + " measurement=" + measurementReady + " rmsMb=" + measurement.mRms
                                     + " peakMb=" + measurement.mPeak + " waveformRms=" + dsp.waveformRms()
                                     + " restoreGain=" + dsp.restoreGain() + " fftMaxUs=" + fftMaxUs
                                     + " outputGain=" + outputGain
+                                    + " channelGain=" + channelGain
                                     + " outputType=" + (output == null ? 0 : output.type)
                                     + " captureVolume=" + (output == null ? "UNKNOWN" : output.mode)
                                     + " bassOnsets=" + bass.onsets() + " bassPeak=" + bass.peak()
@@ -227,6 +271,8 @@ final class LiveSpectrum {
             frames = 0;
             worker.postDelayed(watchdog, 1000);
             reporter.report("live_capture_start generation=" + generation + " subscribers=" + subscribers
+                    + " sessionId=" + captureSession + " spatial=" + source.spatial()
+                    + " sourceChannels=" + sourceChannels + " captureChannels=" + captureChannels
                     + " scaling=" + (normalized ? "normalized+raw_rms" : "as_played")
                     + " fft=float captureSize=" + size, null);
         } catch (RuntimeException failure) {
@@ -279,9 +325,11 @@ final class LiveSpectrum {
         if (clearFrame) { latest = new float[SpectrumDsp.BARS]; lastFrame = 0; }
         if (old != null) {
             try { old.setEnabled(false); } catch (RuntimeException ignored) {}
+            try { old.setDataCaptureListener(null, 0, false, false); } catch (RuntimeException ignored) {}
             try { old.release(); }
             catch (RuntimeException failure) { reporter.report("live_capture_error stage=release", failure); }
-            reporter.report("live_capture_stop reason=" + reason + " frames=" + frames, null);
+            reporter.report("live_capture_stop reason=" + reason + " frames=" + frames
+                    + " sessionId=" + captureSession, null);
         }
         if (clearFrame) queueDelivery();
     }

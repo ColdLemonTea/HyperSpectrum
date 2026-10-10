@@ -197,9 +197,11 @@ public final class SpectrumModule extends XposedModule {
         if (probe != null) probe.observe(context, key, playing, route, force);
         if (ui != null) {
             Icon artwork = (Icon) field(media, "artwork");
-            String track = field(media, "packageName") + "|" + field(media, "userId") + "|"
+            String packageName = (String) field(media, "packageName");
+            int userId = ((Number) field(media, "userId")).intValue();
+            String track = packageName + "|" + userId + "|"
                     + key + "|" + field(media, "mediaId") + "|" + field(media, "song") + "|" + field(media, "artist");
-            ui.media(context, key, playing, route, track, artwork);
+            ui.media(context, key, playing, route, packageName, userId, track, artwork);
         }
     }
 
