@@ -15,6 +15,7 @@ AGENTS.md
 
 # Local signing keys and credentials.
 keystore.properties
+signing.env
 keystore/
 *.jks
 *.keystore
