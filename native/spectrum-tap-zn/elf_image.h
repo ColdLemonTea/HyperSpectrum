@@ -30,7 +30,8 @@ struct ElfImage {
         bool found=false;
         for(size_t i=0;i<count;++i){const auto& p=phdr[i];
             if(p.p_type!=PT_DYNAMIC)continue;
-            if(found||p.p_memsz>1024*1024)return false;found=true;
+            if(found||p.p_memsz>1024*1024)return false;
+            found=true;
             bool terminated=false;uint64_t sym=0,str=0,rela=0;size_t ent=0;bool rel=false;
             for(size_t off=0;off+sizeof(Elf64_Dyn)<=p.p_memsz;off+=sizeof(Elf64_Dyn)){
                 Elf64_Dyn x{};if(!read(bias+p.p_vaddr+off,x))return false;

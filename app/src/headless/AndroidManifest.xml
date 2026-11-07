@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:allowBackup="false" android:label="@string/module_name"
+        android:icon="@drawable/ic_spectrum" android:supportsRtl="true"
+        android:description="@string/module_description" />
+</manifest>

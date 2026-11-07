@@ -9,6 +9,8 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val noSettingsUi = providers.gradleProperty("noSettingsUi").orElse("false").get().toBoolean()
+
 val gitCommitCount = providers.exec {
     workingDir(rootProject.projectDir)
     commandLine("git", "rev-list", "--count", "HEAD")
@@ -59,6 +61,14 @@ android {
     buildFeatures {
         buildConfig = true
         compose = true
+    }
+
+    sourceSets.getByName("main") {
+        if (noSettingsUi) {
+            manifest.srcFile("src/headless/AndroidManifest.xml")
+        } else {
+            java.directories.add("src/settingsUi/java")
+        }
     }
 
     defaultConfig {
@@ -122,13 +132,15 @@ android {
 
 dependencies {
     compileOnly(libs.libxposed.api)
-    implementation(libs.libxposed.service)
-    implementation(libs.activity.compose)
-    implementation(libs.lifecycle.viewmodel.ktx)
-    implementation(libs.compose.foundation)
-    implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.miuix.glass)
-    implementation(libs.miuix.preference)
-    implementation(libs.compose.material.icons.extended)
+    if (!noSettingsUi) {
+        implementation(libs.libxposed.service)
+        implementation(libs.activity.compose)
+        implementation(libs.lifecycle.viewmodel.ktx)
+        implementation(libs.compose.foundation)
+        implementation(libs.kotlinx.coroutines.android)
+        implementation(libs.miuix.glass)
+        implementation(libs.miuix.preference)
+        implementation(libs.compose.material.icons.extended)
+    }
     testImplementation(libs.junit)
 }

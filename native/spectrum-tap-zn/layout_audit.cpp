@@ -52,7 +52,8 @@ struct Fixture {
             if(section.sh_size<4||std::memcmp(bytes,"APS2",4))throw std::runtime_error("packed RELA header");
             auto sleb=[&](){uint64_t v=0;unsigned shift=0;unsigned char x;
                 do{if(cursor>=section.sh_size||shift>=64)throw std::runtime_error("packed RELA integer");x=bytes[cursor++];v|=uint64_t(x&127)<<shift;shift+=7;}while(x&128);
-                if(shift<64&&(x&64))v|=~uint64_t(0)<<shift;return int64_t(v);
+                if(shift<64&&(x&64))v|=~uint64_t(0)<<shift;
+                return int64_t(v);
             };
             const int64_t total=sleb();int64_t offset=sleb(),addend=0,done=0;
             while(done<total){const auto group=sleb(),flags=sleb();if(group<=0||group>total-done||flags<0||flags>15)throw std::runtime_error("packed RELA group");

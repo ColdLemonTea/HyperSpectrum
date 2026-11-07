@@ -34,8 +34,9 @@ audio may also affect the spectrum.
 Use a full Git checkout, Android SDK 37, and JDK 25 for the Gradle daemon.
 Set `ANDROID_HOME` or specify `sdk.dir` in a local, untracked `local.properties`.
 
-Place a local [miuix](https://github.com/compose-miuix-ui/miuix) checkout in
-`../miuix`, next to this project. The settings UI uses its Glass components
+For the full settings UI build, place a local
+[miuix](https://github.com/compose-miuix-ui/miuix) checkout in `../miuix`,
+next to this project. The settings UI uses its Glass components
 (0.9.4 development sources) through a Gradle composite build. No published miuix
 artifacts are used. Both builds must use the same AGP version; this project
 currently matches the local checkout's AGP 9.4.1. The local miuix build also
@@ -62,6 +63,15 @@ Windows:
 The signed APK is `app/build/outputs/apk/release/app-release.apk`.
 Without signing credentials, the output is `app-release-unsigned.apk` in the same
 directory.
+
+Without a local miuix checkout, build the APK without its settings UI:
+
+```shell
+./gradlew :app:assembleRelease -PnoSettingsUi=true
+```
+
+This retains the SystemUI hook and supports the native APK variant with its
+usual `-PnativeCapture=true -PnativeTapBuild=SOURCE_HASH` options.
 
 An optional experimental Zygisk Next backend is available for compatible
 AudioFlinger implementations on arm64 Android 16 or newer. It requires
