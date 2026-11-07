@@ -11,7 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.libxposed.service.XposedService
-import io.github.wxxsfxyzm.hyperspectrum.SpectrumPreferences
+import io.github.wxxsfxyzm.hyperspectrum.config.SpectrumPreferences
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job

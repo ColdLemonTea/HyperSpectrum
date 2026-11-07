@@ -14,6 +14,7 @@
     <string name="color_scheme">颜色方案</string>
     <string name="color_hyperos">优化原版取色方案</string>
     <string name="color_ios">iOS 取色方案</string>
+    <string name="color_macos">macOS 封面色彩</string>
     <string name="color_original">原版取色方案</string>
     <string name="stop_when_muted">音量为 0 时停止波形</string>
     <string name="stop_when_muted_summary">媒体音量为 0 时停止显示波形。（待实现）</string>

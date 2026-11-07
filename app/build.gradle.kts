@@ -70,6 +70,13 @@ android {
         buildConfigField("String", "PROBE_BUILD", "\"${probeBuild.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
         buildConfigField("boolean", "DIAGNOSTIC_MODE", providers.gradleProperty("diagnosticProbe").orElse("false").get())
         buildConfigField("boolean", "ROUTE_COMPENSATION", providers.gradleProperty("routeCompensation").orElse("true").get())
+        buildConfigField("boolean", "NATIVE_CAPTURE", providers.gradleProperty("nativeCapture").orElse("false").get())
+        val nativeTapBuild = providers.gradleProperty("nativeTapBuild").orElse("").get()
+        require(nativeTapBuild.isEmpty() || nativeTapBuild.matches(Regex("[0-9a-f]{64}"))) { "Invalid nativeTapBuild" }
+        require(!providers.gradleProperty("nativeCapture").orElse("false").get().toBoolean() || nativeTapBuild.isNotEmpty()) {
+            "nativeCapture requires the source hash from out/native-tap/manifest.json"
+        }
+        buildConfigField("String", "NATIVE_TAP_BUILD", "\"$nativeTapBuild\"")
     }
     signingConfigs {
         create("release") {

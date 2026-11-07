@@ -16,6 +16,7 @@
     <string name="color_scheme">Color scheme</string>
     <string name="color_hyperos">Optimized original</string>
     <string name="color_ios">iOS</string>
+    <string name="color_macos">macOS artwork colors</string>
     <string name="color_original">Original</string>
     <string name="stop_when_muted">Stop at volume 0</string>
     <string name="stop_when_muted_summary">Stop the waveform when media volume is zero. (to be implemented)</string>

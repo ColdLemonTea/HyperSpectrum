@@ -1,0 +1,4 @@
+{
+    global: zn_module; zn_companion_module;
+    local: *;
+};

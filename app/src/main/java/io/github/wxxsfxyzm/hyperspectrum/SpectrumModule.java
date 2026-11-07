@@ -3,10 +3,17 @@
 
 package io.github.wxxsfxyzm.hyperspectrum;
 
+import io.github.wxxsfxyzm.hyperspectrum.audio.CaptureProbe;
+import io.github.wxxsfxyzm.hyperspectrum.audio.MediaRoute;
+import io.github.wxxsfxyzm.hyperspectrum.config.SpectrumPreferences;
+import io.github.wxxsfxyzm.hyperspectrum.render.IslandSpectrumUi;
+import io.github.wxxsfxyzm.hyperspectrum.render.OriginalArtwork;
+
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.drawable.Icon;
+import android.media.session.MediaSession;
 import android.os.Process;
 import android.util.Log;
 
@@ -250,6 +257,8 @@ public final class SpectrumModule extends XposedModule {
         Boolean playing = (Boolean) field(media, "isPlaying");
         Object device = field(controller, "castDeviceType");
         String route = device == null ? "" : device.toString();
+        if ("others".equals(route))
+            route = MediaRoute.resolve(context, route, (MediaSession.Token) field(media, "token"));
         report("media_state playing=" + playing + " route=" + route, null);
         if (probe != null) probe.observe(context, key, playing, route, force);
         if (ui != null) {

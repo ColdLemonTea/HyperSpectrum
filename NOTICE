@@ -11,3 +11,7 @@ The module uses libxposed API and service.
 Copyright libxposed contributors
 Licensed under the Apache License, Version 2.0.
 https://github.com/libxposed
+
+The optional native backend uses Zygisk Next API 4 ABI declarations.
+No Zygisk Next hook engine is bundled.
+https://github.com/LSPosed/ZygiskNext/blob/v1.5.2/zygisk_next_api.h

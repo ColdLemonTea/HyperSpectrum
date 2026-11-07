@@ -1,0 +1,251 @@
+// Copyright 2026 wxxsfxyzm
+// SPDX-License-Identifier: Apache-2.0
+package io.github.wxxsfxyzm.hyperspectrum.audio;
+
+import io.github.wxxsfxyzm.hyperspectrum.BuildConfig;
+import io.github.wxxsfxyzm.hyperspectrum.config.SpectrumPreferences;
+
+import android.content.Context;
+import android.media.AudioManager;
+import android.net.Credentials;
+import android.net.LocalServerSocket;
+import android.net.LocalSocket;
+import android.os.Handler;
+import android.os.HandlerThread;
+import android.os.SystemClock;
+import android.system.Os;
+import android.system.OsConstants;
+import android.system.ErrnoException;
+import android.system.StructPollfd;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicLong;
+
+/** A shared, lifecycle-gated native result consumer. All drawing stays on the main Looper. */
+final class NativeSpectrum implements SpectrumCapture {
+    private record Control(int uid, int session, boolean ready, long generation) { }
+    private final CaptureProbe.Reporter reporter;
+    private final Sink sink;
+    private final Handler main;
+    private final HandlerThread thread = new HandlerThread("IslandSpectrumNativeControl");
+    private final Handler worker;
+    private final Thread io;
+    private final AtomicLong revision = new AtomicLong(Math.max(1, SystemClock.elapsedRealtimeNanos()));
+    private volatile boolean closed, requested;
+    private volatile Control control = new Control(-1, -1, false, 1);
+    private volatile LocalServerSocket server;
+    private volatile LocalSocket client;
+    private volatile String mediaPackage;
+    private volatile int mediaUser = -1;
+    private AudioManager audio;
+    private PlaybackSource source;
+    private boolean stopWhenMuted = SpectrumPreferences.DEFAULT_STOP_WHEN_MUTED;
+    private long lastError;
+    private float[] latest = new float[6];
+    private long latestTime;
+    private long latestGeneration;
+    private boolean deliveryQueued, latestHealthy;
+    private final Runnable deliver = this::deliver;
+    private final Runnable poll = this::poll;
+
+    NativeSpectrum(CaptureProbe.Reporter reporter, Handler main, Sink sink) {
+        this.reporter = reporter; this.main = main; this.sink = sink;
+        thread.start(); worker = new Handler(thread.getLooper());
+        io = new Thread(this::serve, "IslandSpectrumNativeResults"); io.start();
+        worker.post(poll);
+    }
+    @Override public void execute(Runnable action) { worker.post(() -> { if (!closed) action.run(); }); }
+    @Override public void audio(Context context) {
+        execute(() -> { audio = context.getSystemService(AudioManager.class); source = audio == null ? null : new PlaybackSource(context, audio); });
+    }
+    @Override public void media(String packageName, int userId) {
+        if (!java.util.Objects.equals(mediaPackage, packageName) || mediaUser != userId) {
+            mediaPackage = packageName; mediaUser = userId; revision.incrementAndGet();
+        }
+        execute(() -> {
+            if (source == null) return;
+            try { source.media(packageName, userId); refresh(); }
+            catch (ReflectiveOperationException | RuntimeException e) { reporter.report("native_media_unavailable", e); }
+        });
+    }
+    @Override public void stopWhenMuted(boolean value) { execute(() -> { stopWhenMuted = value; refresh(); }); }
+    @Override public void demand(boolean enabled, int count) {
+        if (requested != enabled) { requested = enabled; revision.incrementAndGet(); }
+        execute(this::refresh);
+    }
+    private void poll() { if (!closed) { refresh(); worker.postDelayed(poll, 200); } }
+    private void refresh() {
+        int uid = -1, session = -1; boolean active = false;
+        try {
+            if (requested && source != null) {
+                PlaybackSource.State state = source.readNative(); uid = state.uid(); session = state.sessionId();
+                active = uid >= 10000 && session > 0 && !(stopWhenMuted && audio.isStreamMute(AudioManager.STREAM_MUSIC));
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            long now = SystemClock.uptimeMillis();
+            if (now - lastError > 5000) { lastError = now; reporter.report("native_source_unavailable", e); }
+        }
+        Control old = control;
+        if (old.uid != uid || old.session != session || old.ready != active) revision.incrementAndGet();
+        long generation = revision.get();
+        control = new Control(uid, session, active, generation);
+        if (generation != old.generation) {
+            reporter.report("native_capture_demand active=" + active + " uid=" + uid + " session=" + session
+                    + " generation=" + generation + " stopWhenMuted=" + stopWhenMuted, null);
+            publish(new float[6], 0, false);
+        }
+    }
+    private void serve() {
+        try {
+            LocalServerSocket listener = new LocalServerSocket(NativeSpectrumProtocol.SOCKET);
+            server = listener;
+            if (closed) { closeServer(listener); return; }
+            reporter.report("native_results_listen abi=2 expectedBuild=" + BuildConfig.NATIVE_TAP_BUILD, null);
+            while (!closed) {
+                LocalSocket connection = listener.accept();
+                try {
+                    Credentials peer = connection.getPeerCredentials();
+                    if (peer.getUid() != 0 || peer.getPid() <= 1) continue;
+                    connection.setSoTimeout(200); client = connection;
+                    consume(connection);
+                } catch (IOException | RuntimeException e) {
+                    if (!closed) reporter.report("native_results_disconnected", e);
+                } finally {
+                    if (client == connection) client = null;
+                    try { connection.close(); } catch (IOException ignored) { }
+                    publish(new float[6], 0, false);
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            if (!closed) reporter.report("native_results_unavailable", e);
+        } finally {
+            LocalServerSocket listener = server; server = null;
+            if (listener != null) closeServer(listener);
+        }
+    }
+    private void consume(LocalSocket connection) throws IOException {
+        InputStream input = connection.getInputStream();
+        byte[] packet = new byte[NativeSpectrumProtocol.SIZE];
+        int offset = 0; long connected = SystemClock.uptimeMillis(), lastPacket = connected;
+        NativeSpectrumProtocol.Hello hello = null;
+        long nextRequest = 0, requestSequence = 0, previousFrame = 0, frameGeneration = 0;
+        int previousTrack = 0, previousIo = 0, windowFrames = 0; long lastLog = connected;
+        long lastSignal = 0;
+        boolean signalHealthy = false;
+        StructPollfd readiness = new StructPollfd();
+        readiness.fd = connection.getFileDescriptor(); readiness.events = (short) OsConstants.POLLIN;
+        StructPollfd[] pollfds = {readiness};
+        float[] minimum = new float[6], maximum = new float[6]; double[] sum = new double[6]; int[] top = new int[6];
+        Arrays.fill(minimum, 1);
+        while (!closed) {
+            long now = SystemClock.uptimeMillis();
+            // A companion heartbeat does not prove that PCM is still arriving.
+            // Mark the signal unavailable once the last accepted PCM expires.
+            if (signalHealthy && now - lastSignal >= 250) {
+                signalHealthy = false;
+                publish(new float[6], 0, false);
+            }
+            if (now - lastPacket > 2000) throw new IOException("Native heartbeat expired");
+            if (hello != null && now >= nextRequest) {
+                Control c = control;
+                connection.getOutputStream().write(NativeSpectrumProtocol.request(hello.instance(), c.generation,
+                        ++requestSequence, c.uid, c.session, requested && c.ready && c.generation == revision.get()));
+                nextRequest = now + 200;
+            }
+            // LocalSocket's native read reports EAGAIN as a generic IOException,
+            // not necessarily SocketTimeoutException. Poll explicitly so idle
+            // connections can renew control without disconnect/reconnect loops.
+            try {
+                if (Os.poll(pollfds, 100) == 0) continue;
+            } catch (ErrnoException e) { throw e.rethrowAsIOException(); }
+            if ((readiness.revents & (OsConstants.POLLERR | OsConstants.POLLNVAL)) != 0)
+                throw new IOException("Native socket error");
+            int count = input.read(packet, offset, packet.length - offset);
+            if (count < 0) throw new IOException("Native EOF");
+            offset += count;
+            if (offset != packet.length) continue;
+            offset = 0; lastPacket = SystemClock.uptimeMillis();
+            if (hello == null) {
+                hello = NativeSpectrumProtocol.hello(packet, BuildConfig.NATIVE_TAP_BUILD);
+                revision.incrementAndGet(); execute(this::refresh);
+                reporter.report("native_results_connected producerPid=" + hello.pid()
+                        + " instance=" + Long.toUnsignedString(hello.instance(), 16), null);
+                continue;
+            }
+            NativeSpectrumProtocol.Frame f = NativeSpectrumProtocol.frame(packet);
+            Control c = control;
+            if (f.instance() != hello.instance()) throw new IOException("Native instance changed");
+            if (!requested || !c.ready || c.generation != revision.get()) continue;
+            long threshold = frameGeneration != f.generation() || previousTrack != f.track() || previousIo != f.io() ? 0 : previousFrame;
+            if (!NativeSpectrumProtocol.usable(f, hello.instance(), c.generation, c.uid, c.session, lastPacket, threshold)) continue;
+            long time = f.nanos() / 1000000;
+            if (frameGeneration != f.generation() || previousTrack != f.track() || previousIo != f.io()) {
+                frameGeneration = f.generation(); previousTrack = f.track(); previousFrame = 0;
+                previousIo = f.io();
+                windowFrames = 0; lastLog = lastPacket;
+                Arrays.fill(minimum, 1); Arrays.fill(maximum, 0); Arrays.fill(sum, 0); Arrays.fill(top, 0);
+            }
+            if (f.sequence() <= previousFrame) continue;
+            previousFrame = f.sequence();
+            float[] levels = new float[6];
+            for (int i = 0; i < 6; i++) levels[i] = SpectrumDsp.nativeResponse(i, f.bands()[i]);
+            publish(levels, time, true, f.generation());
+            lastSignal = time; signalHealthy = true;
+            windowFrames++;
+            for (int i = 0; i < 6; i++) {
+                minimum[i] = Math.min(minimum[i], levels[i]); maximum[i] = Math.max(maximum[i], levels[i]);
+                sum[i] += levels[i]; if (levels[i] >= 0.95f) top[i]++;
+            }
+            if (lastPacket - lastLog >= 5000) {
+                float[] mean = new float[6], nearTop = new float[6];
+                for (int i = 0; i < 6; i++) { mean[i] = (float)(sum[i] / windowFrames); nearTop[i] = top[i] * 100f / windowFrames; }
+                reporter.report("native_capture_tick generation=" + frameGeneration + " sessionId=" + c.session
+                        + " track=" + f.track() + " io=" + f.io() + " callbacks=" + f.callbacks() + " fftFrames=" + f.fftFrames()
+                        + " windowFrames=" + windowFrames + " drops=" + f.drops() + " rms=" + f.rms()
+                        + " sampleRateHz=" + f.rate() + " channels=" + f.channels() + " levels=" + Arrays.toString(levels)
+                        + " minimum=" + Arrays.toString(minimum) + " maximum=" + Arrays.toString(maximum)
+                        + " meanLevels=" + Arrays.toString(mean) + " nearTopPercent=" + Arrays.toString(nearTop), null);
+                windowFrames = 0; Arrays.fill(minimum, 1); Arrays.fill(maximum, 0); Arrays.fill(sum, 0); Arrays.fill(top, 0);
+                lastLog = lastPacket;
+            }
+        }
+    }
+    private void publish(float[] levels, long time, boolean healthy) { publish(levels, time, healthy, 0); }
+    private synchronized void publish(float[] levels, long time, boolean healthy, long generation) {
+        if (closed) return;
+        latest = levels; latestTime = time; latestHealthy = healthy; latestGeneration = generation;
+        if (!deliveryQueued) { deliveryQueued = true; main.post(deliver); }
+    }
+    private void deliver() {
+        float[] levels; long time; boolean healthy;
+        synchronized (this) {
+            deliveryQueued = false; if (closed) return;
+            levels = latest; time = latestTime; healthy = latestHealthy && requested
+                    && latestGeneration == revision.get() && SystemClock.uptimeMillis() - time < 250;
+        }
+        sink.frame(levels, time, healthy);
+    }
+    private static void closeServer(LocalServerSocket socket) {
+        var descriptor = socket.getFileDescriptor();
+        if (descriptor != null) {
+            try { Os.shutdown(descriptor, OsConstants.SHUT_RDWR); } catch (ErrnoException ignored) { }
+        }
+        try { socket.close(); } catch (IOException ignored) { }
+    }
+    @Override public void close() {
+        closed = true; requested = false; revision.incrementAndGet();
+        worker.removeCallbacksAndMessages(null); main.removeCallbacks(deliver);
+        LocalSocket connection = client;
+        if (connection != null) {
+            try { connection.shutdownInput(); connection.shutdownOutput(); } catch (IOException ignored) { }
+            finally { try { connection.close(); } catch (IOException ignored) { } }
+        }
+        LocalServerSocket listener = server;
+        if (listener != null) closeServer(listener);
+        thread.quitSafely();
+        try { io.join(1500); thread.join(1500); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IllegalStateException("Native capture retirement interrupted", e); }
+        if (io.isAlive() || thread.isAlive()) throw new IllegalStateException("Native capture worker did not retire");
+    }
+}

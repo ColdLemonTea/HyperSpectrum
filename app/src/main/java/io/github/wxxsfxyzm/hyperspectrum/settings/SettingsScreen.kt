@@ -47,7 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.wxxsfxyzm.hyperspectrum.BuildConfig
 import io.github.wxxsfxyzm.hyperspectrum.R
-import io.github.wxxsfxyzm.hyperspectrum.SpectrumPreferences
+import io.github.wxxsfxyzm.hyperspectrum.config.SpectrumPreferences
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Icon
@@ -162,14 +162,14 @@ internal fun SettingsScreen(
                             GlassDropdownRow(
                                 title = stringResource(R.string.color_scheme),
                                 value = stringResource(
-                                    when (state.colorScheme) {
+                                    if (BuildConfig.NATIVE_CAPTURE) R.string.color_macos else when (state.colorScheme) {
                                         SpectrumPreferences.ORIGINAL -> R.string.color_original
                                         SpectrumPreferences.HYPEROS -> R.string.color_hyperos
                                         else -> R.string.color_ios
                                     },
                                 ),
                                 anchor = colorAnchor,
-                                enabled = optionsEnabled,
+                                enabled = optionsEnabled && !BuildConfig.NATIVE_CAPTURE,
                                 onClick = { colorMenu = true },
                                 onBounds = { colorBounds = it },
                             )
@@ -202,7 +202,7 @@ internal fun SettingsScreen(
             }
             // The popup must be outside the layer it samples to avoid a render-node cycle.
             GlassDropdownPopup(
-                show = colorMenu && optionsEnabled,
+                show = colorMenu && optionsEnabled && !BuildConfig.NATIVE_CAPTURE,
                 onDismissRequest = { colorMenu = false },
                 anchorBounds = colorBounds,
                 anchor = colorAnchor,

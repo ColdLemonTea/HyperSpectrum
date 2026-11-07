@@ -1,0 +1,1 @@
+path=/system/bin/audioserver companion lib/libhyperspectrum_tap.so

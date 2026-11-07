@@ -1,0 +1,6 @@
+id=hyperspectrum-tap-zn
+name=HyperSpectrum AudioFlinger Probe
+version=0.2-native-fft
+versionCode=1
+author=wxxsfxyzm
+description=Exact-build source PCM FFT with authenticated SystemUI result bridge and short capture leases. Requires matching HyperSpectrum APK.

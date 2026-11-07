@@ -125,6 +125,8 @@ def main() -> int:
         build_command = sub.add_parser(command, help=help_text)
         build_command.add_argument("--diagnostic", action="store_true", help="Use the old bounded FFT probe instead of the live UI")
         build_command.add_argument("--release", action="store_true", help="Build and install the signed, optimized Release APK")
+        build_command.add_argument("--native", action="store_true", help="Use the exact built native tap; require out/native-tap/manifest.json")
+        build_command.add_argument("--native-trial", action="store_true", help="Explicit controlled trial of a quarantined native build; requires --native and an exact installed library hash")
     capture = sub.add_parser("capture", help="Capture fresh module logcat while user plays then pauses")
     capture.add_argument("--seconds", type=int, default=40)
     capture.add_argument("--output", type=Path, default=ROOT / "out" / "capture.log")
@@ -145,7 +147,18 @@ def main() -> int:
             before = device.log_snapshot()
         variant = "release" if args.release else "debug"
         task = ":app:assembleRelease" if args.release else ":app:assembleDebug"
-        Device.run([str(ROOT / "gradlew"), task, f"-PprobeBuild={build}",
+        native_args = []
+        if args.native_trial and not args.native:
+            raise RuntimeError("--native-trial requires --native")
+        if args.native:
+            native_manifest = json.loads((ROOT / "out/native-tap/manifest.json").read_text())
+            if native_manifest.get("do_not_deploy", False) and not args.native_trial:
+                raise RuntimeError("Native build is quarantined: " + native_manifest.get("validation_status", "unvalidated"))
+            installed_hash = device.root("sha256sum /data/adb/modules/hyperspectrum-tap-zn/lib/libhyperspectrum_tap.so").split()[0]
+            if installed_hash != native_manifest["library_sha256"]:
+                raise RuntimeError("Installed native library differs from the local build; APK not installed")
+            native_args = ["-PnativeCapture=true", "-PnativeTapBuild=" + native_manifest["source_sha256"]]
+        Device.run([str(ROOT / "gradlew"), task, f"-PprobeBuild={build}", *native_args,
                     "-PdiagnosticProbe=" + str(args.diagnostic).lower(),
                     "--console=plain"], cwd=ROOT, timeout=600)
         apk = ROOT / f"app/build/outputs/apk/{variant}/app-{variant}.apk"
