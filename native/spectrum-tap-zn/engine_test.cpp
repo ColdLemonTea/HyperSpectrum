@@ -234,6 +234,21 @@ void renewal() {
     c.seconds = 3; assert(!valid(c, 42, 0, now));
 }
 void identities() {
+    const char* system = systemui_process_label(1000, 1000, "u:r:system_app:s0");
+    assert(system && std::strcmp(system, "u:r:system_app:s0") == 0);
+    const char* platform = systemui_process_label(10123, 10123, "u:r:platform_app:s0");
+    assert(platform && std::strcmp(platform, "u:r:platform_app:s0:c512,c768") == 0);
+    // Neither UID, socket domain nor package ownership alone is sufficient.
+    assert(!systemui_process_label(1000, 1000, "u:r:platform_app:s0"));
+    assert(!systemui_process_label(10123, 10123, "u:r:system_app:s0"));
+    assert(!systemui_process_label(1000, 10123, "u:r:system_app:s0"));
+    assert(!systemui_process_label(10123, 1000, "u:r:platform_app:s0"));
+    assert(!systemui_process_label(0, 0, "u:r:system_app:s0"));
+    assert(!systemui_process_label(2000, 2000, "u:r:system_app:s0"));
+    assert(!systemui_process_label(10123, 10123, "u:r:untrusted_app:s0"));
+    assert(!systemui_process_label(10123, 10123, "u:r:platform_app:s0:extra"));
+    assert(!exact_identity("u:r:system_app:s0:extra", 23, system));
+    assert(!exact_identity("u:r:platform_app:s0", 19, platform));
     constexpr char name[] = "com.android.systemui\0\0\0\0";
     assert(exact_identity(name, sizeof(name), "com.android.systemui"));
     constexpr char extra[] = "com.android.systemui\0other";

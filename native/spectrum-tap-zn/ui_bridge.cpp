@@ -22,17 +22,17 @@ void UiBridge::connect_if_needed(const Report& r, uint64_t now) {
     char context[128]{}, path[128]{};
     bool ok = stat("/data/user_de/0/com.android.systemui", &owner) == 0;
     if (!ok) ok = stat("/data/user/0/com.android.systemui", &owner) == 0;
-    ok = ok && owner.st_uid >= 10000 && getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) == 0 &&
+    ok = ok && getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) == 0 &&
          len == sizeof(cred) && cred.uid == owner.st_uid && cred.pid > 1;
     std::snprintf(path, sizeof(path), "/proc/%d/cmdline", cred.pid);
     len = sizeof(context);
     ok = ok && exact_file(path, "com.android.systemui") &&
-         getsockopt(fd, SOL_SOCKET, SO_PEERSEC, context, &len) == 0 && len < sizeof(context) &&
-         std::strcmp(context, "u:r:platform_app:s0") == 0;
-    // On this ROM the socket's SO_PEERSEC omits the process MLS categories.
-    // Check both exact measured labels, rather than treating them as identical.
+         getsockopt(fd, SOL_SOCKET, SO_PEERSEC, context, &len) == 0 && len < sizeof(context);
+    const char* process_label = ok ? systemui_process_label(owner.st_uid, cred.uid, context) : nullptr;
+    // Check the process label separately: platform_app sockets omit the MLS
+    // categories, while system_app uses the same label on socket and process.
     std::snprintf(path, sizeof(path), "/proc/%d/attr/current", cred.pid);
-    ok = ok && exact_file(path, "u:r:platform_app:s0:c512,c768");
+    ok = process_label && exact_file(path, process_label);
     if (!ok) { error_ = EACCES; close(fd); return; }
     UiPacket hello; hello.type = 1; hello.instance = r.instance;
     std::memcpy(reinterpret_cast<unsigned char*>(&hello) + 32, r.source_build, 64);

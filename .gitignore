@@ -11,6 +11,7 @@ __pycache__/
 # Local research notes and agent instructions.
 AGENTS.md
 /docs/
+/reports/
 
 # Local signing keys and credentials.
 keystore.properties
