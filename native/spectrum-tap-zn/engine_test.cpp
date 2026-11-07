@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "engine.h"
-#include "converted_registry.h"
-#include "converted_path.h"
 #include "identity.h"
 #include "lazy_engine.h"
 #include <array>
@@ -299,51 +297,6 @@ void lazy_lifetime() {
     // Test-only destruction after all readers join. Production retains storage.
     delete first;
 }
-void converted_registry_lifetime() {
-    ConvertedRegistry registry;
-    ConvertedBuffer b{0x100,0x200,0x300,2048,425,48000,5}, found;
-    assert(!registry.find(b.destination,b.source,8,found));
-    assert(registry.add(b));
-    assert(registry.find(b.destination,b.source,2048,found) && found.provider == b.provider);
-    assert(!registry.find(b.source,b.destination,8,found)); // update, not commit
-    assert(!registry.find(b.destination,b.source,2049,found));
-    assert(!registry.find(b.destination,b.source,0,found));
-    registry.retire(0x999); assert(registry.find(b.destination,b.source,8,found));
-    registry.retire(b.destination); assert(!registry.find(b.destination,b.source,8,found));
-    b.provider = 0x400; b.source = 0x500;
-    assert(registry.add(b));
-    assert(!registry.find(b.destination,0x300,8,found)); // recycled destination
-    assert(registry.find(b.destination,b.source,8,found) && found.provider == 0x400);
-    registry.retire(b.destination);
-    for (size_t i = 0; i < ConvertedRegistry::kEntries; ++i) {
-        b.destination = 0x1000 + i * 16; assert(registry.add(b));
-    }
-    b.destination = 0x9000; assert(!registry.add(b)); // bounded, no eviction
-}
-void converted_source_identity() {
-    alignas(16) std::array<unsigned char,0x800> track{};
-    alignas(16) std::array<unsigned char,0x188> vtable{};
-    const auto flinger = reinterpret_cast<uintptr_t>(vtable.data()) - 0x200000;
-    const uintptr_t processing = 0x100000;
-    auto put = [](void* p, size_t off, auto value) { std::memcpy(static_cast<unsigned char*>(p)+off,&value,sizeof(value)); };
-    const int64_t adjustment = -0x7c0;
-    put(vtable.data(),0,adjustment);
-    put(vtable.data(),0x180,flinger + 0x211ea0);
-    put(track.data(),0x7c0,reinterpret_cast<uintptr_t>(vtable.data())+0x170);
-    std::array<uintptr_t,2> reformat{processing+0xb9370,reinterpret_cast<uintptr_t>(track.data())+0x7c0};
-    std::array<uintptr_t,2> provider{processing+0xb9250,reinterpret_cast<uintptr_t>(reformat.data())};
-    auto readable = [](uintptr_t offset, size_t n) { return offset == 0x200000 && n == 0x188; };
-    auto resolve = [&] { return converted_source_track(provider.data(),processing,flinger,readable); };
-    assert(resolve() == track.data());
-    put(vtable.data(),0x180,flinger + 0x1234); assert(!resolve()); // another provider class
-    put(vtable.data(),0x180,flinger + 0x211ea0);
-    put(vtable.data(),0,int64_t(-0x801)); assert(!resolve());
-    put(vtable.data(),0,adjustment);
-    reformat[0] = processing + 0xdead; assert(!resolve()); // unknown ABI
-    reformat[0] = processing + 0xb9370;
-    reformat[1] = reinterpret_cast<uintptr_t>(reformat.data()); assert(!resolve()); // cycle
-    reformat[1] = 0; assert(!resolve());
-}
 void converted_stage_and_mono() {
     Engine e; Report r; auto m = meta(); assert(e.configure(command(),now));
     std::array<float,2048*2> pcm{};
@@ -491,4 +444,4 @@ void app_gain_before_display_fft() {
     }
 }
 }
-int main() { ordinary_mono_lifecycle(); app_gain_before_display_fft(); spatial_common_and_engine(); converted_registry_lifetime(); converted_source_identity(); converted_stage_and_mono(); gates_and_energy(); drops_and_format(); quiescence(); protocol(); fft_signal(); renewal(); identities(); lazy_lifetime(); changing_outputs(); apple_bands_and_cadence(); apple_accelerate_reference(); multichannel_energy(); multichannel_copy_guards(); }
+int main() { ordinary_mono_lifecycle(); app_gain_before_display_fft(); spatial_common_and_engine(); converted_stage_and_mono(); gates_and_energy(); drops_and_format(); quiescence(); protocol(); fft_signal(); renewal(); identities(); lazy_lifetime(); changing_outputs(); apple_bands_and_cadence(); apple_accelerate_reference(); multichannel_energy(); multichannel_copy_guards(); }

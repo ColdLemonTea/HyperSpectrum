@@ -12,7 +12,6 @@ constexpr uint32_t kPcmBytes = kFrames * kMaxChannels * sizeof(float);
 constexpr const char* kDirectory = "/data/adb/hyperspectrum-tap";
 constexpr const char* kSymbol = "_ZN7android5Track15interceptBufferERKNS_19AudioBufferProvider6BufferE";
 constexpr const char* kLibrary = "/system/lib64/libaudioflinger.so";
-constexpr uint64_t kOffset = 0x2166f0;
 
 // Fixed little endian protocol. All actors here are arm64 or the Python host.
 struct Command {

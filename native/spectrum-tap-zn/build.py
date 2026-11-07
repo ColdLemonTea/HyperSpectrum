@@ -19,7 +19,7 @@ def source_hash(directory=HERE):
     # Documentation, host tests and control scripts are not producer code.
     # Editing them must not invalidate an otherwise identical APK/library pair.
     files = sorted(p for p in directory.iterdir() if p.is_file() and (
-        (p.suffix in {'.cpp', '.h'} and p.name != 'engine_test.cpp') or
+        (p.suffix in {'.cpp', '.h'} and p.name not in {'engine_test.cpp', 'layout_test.cpp', 'layout_audit.cpp'}) or
         p.name in {'CMakeLists.txt', 'exports.map', 'build.py'}))
     digest = hashlib.sha256()
     for path in files:
@@ -37,6 +37,8 @@ def main():
                         os.environ.get('ANDROID_SDK_ROOT'), help='Android SDK root')
     parser.add_argument('--output', type=Path, default=ROOT / 'out/native-tap',
                         help='Build directory; use a separate directory for offline review')
+    parser.add_argument('--audit-library', type=Path, action='append', default=[],
+                        help='Offline audit of an extracted libaudioflinger.so; never loads code')
     args = parser.parse_args()
     if args.sdk is None:
         parser.error('Set ANDROID_HOME or pass --sdk SDK_PATH')
@@ -60,6 +62,8 @@ def main():
         f'-DCMAKE_MAKE_PROGRAM={NINJA}', '-DTAP_SANITIZE=ON')
     run(CMAKE, '--build', OUT / 'host')
     run(CMAKE.with_name('ctest' + suffix), '--test-dir', OUT / 'host', '--output-on-failure')
+    for library in args.audit_library:
+        run(OUT / 'host' / ('layout_audit' + suffix), library.resolve())
     run(CMAKE, '-S', HERE, '-B', OUT / 'android', '-G', 'Ninja',
         f'-DCMAKE_MAKE_PROGRAM={NINJA}', f'-DCMAKE_TOOLCHAIN_FILE={NDK}/build/cmake/android.toolchain.cmake',
         '-DANDROID_ABI=arm64-v8a', '-DANDROID_PLATFORM=android-36', '-DANDROID_STL=c++_static',

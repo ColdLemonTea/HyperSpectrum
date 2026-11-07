@@ -63,8 +63,9 @@ The signed APK is `app/build/outputs/apk/release/app-release.apk`.
 Without signing credentials, the output is `app-release-unsigned.apk` in the same
 directory.
 
-An optional experimental Zygisk Next backend is available for Android 17 /
-HyperOS OS4.0.6.0.XPBCNXM on arm64. It requires Zygisk Next 1.5.2 and a matching
+An optional experimental Zygisk Next backend is available for compatible
+AudioFlinger implementations on arm64 Android 16 or newer. It requires
+Zygisk Next 1.5.2 and a matching
 native module and APK; ordinary builds continue to use Visualizer. This variant
 uses macOS-style artwork colors and a fixed color scheme. See the native
 [build and installation instructions](native/spectrum-tap-zn/README.md).

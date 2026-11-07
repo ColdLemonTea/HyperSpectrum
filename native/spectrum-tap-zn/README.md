@@ -1,11 +1,14 @@
 # HyperSpectrum AudioFlinger probe
 
-This is an experimental backend for an exact ROM build. Compatibility with
+This is an experimental backend for recognized AudioFlinger ABIs. Compatibility with
 other ZN audio modules is not guaranteed; generated packages remain quarantined
 for explicit device trials.
 
 Independent, default-off research module for Zygisk Next 1.5.2 (API 4), arm64,
-Android 17 / HyperOS OS4.0.6.0.XPBCNXM. Unknown audio library builds are rejected.
+Android 16 or newer. There is no ROM-version or system-library Build ID allowlist.
+Functions and PLT imports are resolved by symbol and ELF relocation; Track field
+offsets are extracted from validated accessors. Unknown virtual-interface or
+instruction layouts disable capture instead of using guessed addresses.
 It computes source PCM frequency bands for a matching HyperSpectrum APK and
 also reports bounded diagnostic energy statistics. The IPC ABI is version 2.
 The PLT-based revision is required; the earlier inline probe is unsupported.
@@ -26,10 +29,23 @@ Install the ZIP through KernelSU only for an explicit device trial.
 A fresh audioserver process is required; these scripts never restart it.
 No SELinux rules are bundled.
 
+The tested Android 17 / HyperOS 4 device is the only device validated so far;
+removing a version lock does not establish compatibility with every ROM. The
+runtime matcher currently recognizes the Track virtual-interface and ARM64
+accessor patterns used by that implementation. Other interfaces fail closed.
+The previous experimental converted-buffer hooks are retired. Stereo and the
+supported spatial analysis use the pre-volume Track feed; other layouts use
+the raw analysis fallback. No output HAL buffer is patched or replayed.
+
 `ANDROID_HOME` (or `ANDROID_SDK_ROOT`) may replace `--sdk`. Use
 `--output out/native-review` for offline builds that must preserve the manifest
 of an already installed library. Native source changes require a newly matched
 APK; an offline build does not update either device component.
+
+To audit an extracted system library offline without loading it, add
+`--audit-library PATH_TO_LIBAUDIOFLINGER` to `build.py`. The host auditor relocates
+its private image at different bases, verifies the runtime matcher and checks
+that malformed accessors are rejected. System binaries are not bundled.
 
 The native APK automatically requests short renewable leases only while its
 existing screen/playback/visibility conditions allow capture. It receives only

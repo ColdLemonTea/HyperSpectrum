@@ -30,7 +30,8 @@ class SourceIdentityTest(unittest.TestCase):
                 path.write_text(name)
 
     def test_host_tests_docs_and_control_do_not_invalidate_pair(self):
-        for name in ['engine_test.cpp', 'README.md', 'control.py', 'AGENTS.md', 'module.prop']:
+        for name in ['engine_test.cpp', 'layout_test.cpp', 'layout_audit.cpp', 'README.md',
+                     'control.py', 'AGENTS.md', 'module.prop']:
             (self.root / name).write_text('not producer code')
         (self.root / '__pycache__').mkdir()
         self.assertEqual(self.original, BUILD.source_hash(self.root))
